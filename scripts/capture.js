@@ -1,0 +1,422 @@
+#!/usr/bin/env node
+/**
+ * html-prototype-reader · capture
+ * 渲染式 HTML 原型捕获：extract(渲染提取) + traverse(交互遍历) + compress(压缩) + output(落盘)
+ *
+ * 用法:
+ *   node capture.js <html文件或目录> <输出目录> [--viewport 1440x900] [--max-screens 30] [--timeout 45000]
+ *
+ * 依赖: playwright-core（自动尝试本机 Chrome/Edge，无需下载浏览器）
+ */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+
+/* ---------- playwright-core 解析（NODE_PATH 或托管工作区兜底） ---------- */
+function loadPlaywright() {
+  try { return require('playwright-core'); } catch (e) { /* continue */ }
+  const candidates = [
+    'C:/Users/admin/.workbuddy/binaries/node/workspace/node_modules/playwright-core',
+    path.join(process.env.USERPROFILE || '', '.workbuddy/binaries/node/workspace/node_modules/playwright-core'),
+  ];
+  for (const c of candidates) { try { return require(c); } catch (e) { /* next */ } }
+  console.error('[html-prototype-reader] 找不到 playwright-core，请先安装到托管 node 工作区');
+  process.exit(2);
+}
+const { chromium } = loadPlaywright();
+
+/* ---------- CLI ---------- */
+const argv = process.argv.slice(2);
+const inputArg = argv[0], outDir = argv[1];
+if (!inputArg || !outDir) {
+  console.error('用法: node capture.js <html文件或目录> <输出目录> [--viewport 1440x900] [--max-screens 30]');
+  process.exit(1);
+}
+function opt(name, def) { const i = argv.indexOf('--' + name); return i >= 0 && argv[i + 1] ? argv[i + 1] : def; }
+const [VP_W, VP_H] = String(opt('viewport', '1440x900')).split('x').map(Number);
+const MAX_SCREENS = parseInt(opt('max-screens', '30'), 10);
+const PAGE_TIMEOUT = parseInt(opt('timeout', '45000'), 10);
+fs.mkdirSync(outDir, { recursive: true });
+
+const absInput = path.resolve(inputArg);
+const inputs = [];
+if (fs.statSync(absInput).isDirectory()) {
+  for (const f of fs.readdirSync(absInput).filter(f => /\.html?$/i.test(f)).sort()) inputs.push(path.join(absInput, f));
+} else inputs.push(absInput);
+if (!inputs.length) { console.error('未找到 HTML 文件'); process.exit(1); }
+
+/* ---------- 常量 ---------- */
+const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'LINK', 'META', 'HEAD', 'BR']);
+const STYLE_PROPS = [
+  'display', 'position', 'top', 'right', 'bottom', 'left', 'zIndex', 'opacity', 'overflow',
+  'flexDirection', 'justifyContent', 'alignItems', 'flexWrap', 'gap',
+  'gridTemplateColumns', 'gridTemplateRows', 'gridColumn', 'gridRow', 'gridAutoFlow',
+  'padding', 'margin', 'borderRadius', 'border', 'borderTop', 'borderRight', 'borderBottom', 'borderLeft',
+  'backgroundColor', 'backgroundImage', 'color', 'fontFamily', 'fontSize', 'fontWeight', 'lineHeight',
+  'textAlign', 'letterSpacing', 'textTransform', 'textDecorationLine', 'textOverflow', 'whiteSpace',
+  'boxShadow', 'transform', 'transition', 'cursor', 'visibility', 'aspectRatio', 'objectFit', 'minWidth', 'maxWidth',
+];
+const ALWAYS_KEEP = new Set(['display', 'position', 'flexDirection', 'justifyContent', 'alignItems', 'gridTemplateColumns', 'visibility', 'overflow']);
+
+/* ---------- 页内工具（注入浏览器执行） ---------- */
+function inPageLib() {
+  const STYLE_PROPS = JSON.parse('%STYLE_PROPS_JSON%');
+  const ALWAYS_KEEP = new Set(JSON.parse('%ALWAYS_KEEP_JSON%'));
+  const SKIP = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'LINK', 'META', 'HEAD', 'BR']);
+
+  const rounded = r => ({ x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) });
+  const isVisible = el => {
+    const st = getComputedStyle(el); const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none';
+  };
+  const clsOf = el => (typeof el.className === 'string' ? el.className.trim().split(/\s+/).filter(Boolean) : []);
+  const semOf = el => {
+    const s = {};
+    for (const a of ['role', 'aria-label', 'aria-hidden', 'alt', 'placeholder', 'name', 'type', 'value', 'href', 'title', 'for', 'action', 'contenteditable']) {
+      const v = el.getAttribute && el.getAttribute(a); if (v != null && v !== '') s[a] = String(v).slice(0, 80);
+    }
+    if (el.disabled) s.disabled = true; if (el.required) s.required = true;
+    if (el.checked !== undefined && el.type === 'checkbox') s.checked = el.checked;
+    return s;
+  };
+  const pseudoOf = (el) => {
+    const out = [];
+    for (const p of ['::before', '::after']) {
+      const st = getComputedStyle(el, p);
+      if (st.content && st.content !== 'none' && st.content !== 'normal') {
+        out.push({
+          pseudo: p, content: st.content.slice(0, 40), position: st.position,
+          decorative: st.content === '""' || st.content === "''",
+          backgroundColor: st.backgroundColor !== 'rgba(0, 0, 0, 0)' ? st.backgroundColor : undefined,
+          backgroundImage: st.backgroundImage !== 'none' ? st.backgroundImage.slice(0, 120) : undefined,
+          width: st.width, height: st.height, borderRadius: st.borderRadius, zIndex: st.zIndex,
+        });
+      }
+    }
+    return out.length ? out : undefined;
+  };
+  const styleDiff = (el, parentMap) => {
+    const st = getComputedStyle(el); const diff = {};
+    for (const p of STYLE_PROPS) {
+      const v = st[p]; if (v == null || v === '') continue;
+      const parentV = parentMap ? parentMap[p] : undefined;
+      if (ALWAYS_KEEP.has(p) || v !== parentV) {
+        if (p === 'backgroundImage' && v === 'none') continue;
+        if ((p === 'border' || p === 'borderTop' || p === 'borderRight' || p === 'borderBottom' || p === 'borderLeft') && /0px none|none/.test(v) && !parentV) continue;
+        diff[p] = typeof v === 'string' ? v.slice(0, 120) : v;
+      }
+    }
+    return Object.keys(diff).length ? diff : undefined;
+  };
+  const styleMap = el => { const st = getComputedStyle(el); const m = {}; for (const p of STYLE_PROPS) m[p] = st[p]; return m; };
+
+  const textOf = el => {
+    let t = '';
+    for (const n of el.childNodes) if (n.nodeType === 3) t += n.textContent;
+    t = t.replace(/\s+/g, ' ').trim();
+    return t ? t.slice(0, 100) : undefined;
+  };
+
+  function buildTree(el, parentMap, depth) {
+    if (SKIP.has(el.tagName)) return null;
+    const vis = isVisible(el);
+    const node = { t: el.tagName.toLowerCase() };
+    if (el.id) node.id = el.id;
+    const cls = clsOf(el); if (cls.length) node.c = cls;
+    const r = el.getBoundingClientRect();
+    node.r = rounded(r); node.v = vis ? 1 : 0;
+    const map = styleMap(el);
+    const sd = styleDiff(el, parentMap); if (sd) node.s = sd;
+    const ps = pseudoOf(el); if (ps) node.ps = ps;
+    const sem = semOf(el); if (Object.keys(sem).length) node.sem = sem;
+    const tx = vis ? textOf(el) : undefined; if (tx) node.tx = tx;
+    if (el.tagName === 'CANVAS') { node.canvas = { w: el.width, h: el.height }; }
+    if (el.tagName === 'IMG') { node.img = { src: (el.getAttribute('src') || '').slice(0, 160), broken: el.complete && el.naturalWidth === 0 }; const ss = el.getAttribute('srcset'); if (ss) node.img.srcset = ss.slice(0, 160); }
+    if (el.tagName === 'IFRAME') { node.iframe = { src: (el.src || '').slice(0, 160) }; }
+    if (depth < 24 && el.children.length) {
+      const kids = [];
+      const sigs = [];
+      for (const ch of el.children) {
+        const sub = buildTree(ch, map, depth + 1);
+        if (!sub) continue;
+        kids.push(sub);
+        sigs.push(JSON.stringify([sub.t, sub.c, sub.sigs, sub.tx]));
+      }
+      // 重复兄弟折叠：连续相同签名 → 保留首个 + rep:n
+      const folded = [];
+      let i = 0;
+      while (i < kids.length) {
+        let j = i + 1;
+        while (j < kids.length && sigs[j] === sigs[i] && kids[i].t !== 'div' + '' /* 不折叠裸 div 对齐容器 */) {
+          if (kids[i].t === 'li' || kids[i].t === 'tr' || kids[i].t === 'option' || (kids[i].c && kids[i].c.length) || kids[i].t === 'td' || kids[i].t === 'th') j++; else break;
+        }
+        if (j > i + 1) { kids[i].rep = j - i; folded.push(kids[i]); i = j; }
+        else { folded.push(kids[i]); i++; }
+      }
+      if (folded.length) { node.ch = folded; node.sigs = sigs; }
+    }
+    return node;
+  }
+
+  function visibleEls(root) {
+    return Array.from(root.querySelectorAll('*')).filter(isVisible);
+  }
+
+  function interactiveList() {
+    const list = [];
+    for (const el of visibleEls(document.body)) {
+      const t = el.tagName;
+      const role = el.getAttribute('role');
+      const isInteractive = ['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'A', 'LABEL', 'SUMMARY'].includes(t)
+        || (role && /button|tab|menuitem|link|switch|checkbox|radio|combobox|option/.test(role));
+      if (!isInteractive) continue;
+      const st = getComputedStyle(el);
+      list.push({
+        tag: t.toLowerCase(), cls: clsOf(el).slice(0, 3), text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60) || undefined,
+        sem: semOf(el), rect: rounded(el.getBoundingClientRect()), cursor: st.cursor, inOverlay: !!el.closest('[class*="modal"],[class*="dialog"],[class*="drawer"],[role="dialog"],dialog'),
+      });
+    }
+    return list;
+  }
+
+  function cssStats() {
+    const stats = { totalRules: 0, hover: 0, focus: 0, active: 0, pseudoRules: 0, keyframes: 0, mediaConditions: [], customPropsByState: {}, fontFaces: [] };
+    const customPropRe = /^--/;
+    function walk(rules, mediaText) {
+      for (const r of rules) {
+        stats.totalRules++;
+        if (r.type === CSSRule.STYLE_RULE) {
+          const sel = r.selectorText || '';
+          if (/:hover/.test(sel)) stats.hover++;
+          if (/:focus/.test(sel)) stats.focus++;
+          if (/:active/.test(sel)) stats.active++;
+          if (/::(before|after)/.test(sel)) stats.pseudoRules++;
+          const props = Array.from(r.style || []).filter(p => customPropRe.test(p));
+          if (props.length) {
+            const key = mediaText ? `@media ${mediaText} → ${sel}` : sel;
+            stats.customPropsByState[key] = stats.customPropsByState[key] || {};
+            for (const p of props) stats.customPropsByState[key][p] = r.style.getPropertyValue(p).trim();
+          }
+          const ff = r.style.getPropertyValue('font-family'); if (ff) { /* noop, 字体在 fontFaces */ }
+        } else if (r.type === CSSRule.MEDIA_RULE) { stats.mediaConditions.push(r.conditionText); walk(r.cssRules, r.conditionText); }
+        else if (r.type === CSSRule.KEYFRAMES_RULE) stats.keyframes++;
+        else if (r.type === CSSRule.FONT_FACE_RULE) stats.fontFaces.push({ family: r.style.getPropertyValue('font-family'), src: (r.style.getPropertyValue('src') || '').slice(0, 200), weight: r.style.getPropertyValue('font-weight') || undefined });
+      }
+    }
+    for (const sheet of document.styleSheets) {
+      try { walk(sheet.cssRules, null); } catch (e) { stats.sheetErrors = (stats.sheetErrors || 0) + 1; }
+    }
+    // 断点去重
+    const bpSet = new Set();
+    for (const c of stats.mediaConditions) { const m = c.match(/(\d+(?:\.\d+)?)px/g); if (m) m.forEach(x => bpSet.add(parseFloat(x))); }
+    stats.breakpoints = Array.from(bpSet).map(Number).sort((a, b) => b - a);
+    return stats;
+  }
+
+  function overlayInventory() {
+    const out = [];
+    const seen = new Set();
+    for (const el of document.body.querySelectorAll('[class*="modal"],[class*="dialog"],[class*="drawer"],[class*="toast"],[class*="popover"],dialog,[role="dialog"]')) {
+      if (seen.has(el)) continue; seen.add(el);
+      const st = getComputedStyle(el); const r = el.getBoundingClientRect();
+      out.push({
+        cls: clsOf(el).join('.'), id: el.id || undefined, hiddenNow: !(r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden'),
+        role: el.getAttribute('role') || undefined,
+        tree: buildTree(el, styleMap(el.parentElement), 0),
+      });
+    }
+    return out;
+  }
+
+  return { buildTree, visibleEls, interactiveList, cssStats, overlayInventory, styleMap, isVisible };
+}
+
+/* ---------- 主流程 ---------- */
+(async () => {
+  const started = Date.now();
+  // 启动浏览器：chrome → msedge → 默认
+  let browser = null, channelUsed = null;
+  for (const channel of ['chrome', 'msedge', undefined]) {
+    try { browser = await chromium.launch(channel ? { channel, headless: true } : { headless: true }); channelUsed = channel || 'bundled-chromium'; break; } catch (e) { /* next */ }
+  }
+  if (!browser) { console.error('无法启动浏览器（chrome/msedge 均失败）'); process.exit(3); }
+
+  const pages = [];
+  const failedReqs = [];
+
+  for (const file of inputs) {
+    const page = await browser.newPage({ viewport: { width: VP_W, height: VP_H } });
+    page.on('requestfailed', r => failedReqs.push({ page: path.basename(file), url: r.url().slice(0, 180), err: r.failure() && r.failure().errorText }));
+    page.on('response', r => { if (r.status() >= 400) failedReqs.push({ page: path.basename(file), url: r.url().slice(0, 180), err: 'HTTP ' + r.status() }); });
+
+    const fileUrl = 'file:///' + file.replace(/\\/g, '/');
+    try { await page.goto(fileUrl, { waitUntil: 'load', timeout: PAGE_TIMEOUT }); } catch (e) { pages.push({ file: path.basename(file), error: 'goto: ' + String(e).slice(0, 120) }); await page.close(); continue; }
+    try { await page.waitForLoadState('networkidle', { timeout: 6000 }); } catch (e) { /* 网络长连接容错 */ }
+
+    // 反懒加载 + 全页滚动
+    await page.evaluate(() => {
+      const RealIO = window.IntersectionObserver;
+      if (RealIO) window.IntersectionObserver = class extends RealIO {
+        constructor(cb, opts) { super(cb, opts); setTimeout(() => { try { cb([{ isIntersecting: true, target: document.body }], this); } catch (e) {} }, 0); }
+      };
+      document.querySelectorAll('img[loading="lazy"]').forEach(i => { i.loading = 'eager'; });
+    }).catch(() => {});
+    await page.evaluate(async () => {
+      await new Promise(res => { let y = 0; const t = setInterval(() => { y += 800; window.scrollTo(0, y); if (y >= (document.body ? document.body.scrollHeight : 0)) { clearInterval(t); window.scrollTo(0, 0); res(); } }, 35); });
+    }).catch(() => {});
+    await page.waitForTimeout(400);
+
+    const libSrc = '(' + inPageLib.toString().replace('%STYLE_PROPS_JSON%', JSON.stringify(STYLE_PROPS)).replace('%ALWAYS_KEEP_JSON%', JSON.stringify([...ALWAYS_KEEP])) + ')()';
+
+    // CSS 统计 + 覆盖层清单 + 初始树
+    const css = await page.evaluate(libSrc + '.cssStats()').catch(e => ({ error: String(e).slice(0, 100) }));
+    const overlays = await page.evaluate(libSrc + '.overlayInventory()').catch(() => []);
+
+    // 主题态探测
+    const theme = await page.evaluate(`(() => {
+      const btn = document.querySelector('[class*="theme"],[aria-label*="theme" i],[title*="theme" i]');
+      if (!btn) return { toggles: [] };
+      const probe = () => { const o = {}; for (const sel of ['body','.sidebar','.card','header','nav']) { const el = document.querySelector(sel); if (el) { const st = getComputedStyle(el); o[sel] = { bg: st.backgroundColor, color: st.color }; } } return o; };
+      const before = probe();
+      const states = [];
+      try { btn.click(); } catch(e) {}
+      return new Promise(res => setTimeout(() => {
+        const after = probe();
+        states.push({ name: 'toggled', bodyClasses: document.body.className.slice(0, 80), probe: after });
+        try { btn.click(); } catch(e) {}
+        setTimeout(() => res({ toggles: states, before, toggleFound: true, toggleEl: (typeof btn.className==='string'?btn.className:'') }), 120);
+      }, 150));
+    })()`).catch(() => ({ toggles: [] }));
+
+    // ===== traverse：入口发现 + 逐个点击 + 签名去重 =====
+    const screens = [];
+    const seenSig = new Set();
+    async function captureScreen(name, entryText) {
+      const info = await page.evaluate(`(() => {
+        const lib = ${libSrc};
+        const vis = lib.visibleEls(document.body);
+        const sigParts = vis.map(el => el.tagName + '.' + (typeof el.className === 'string' ? el.className : '')).sort();
+        // 轻量签名：元素+类多重集的哈希
+        let h = 0; const s = sigParts.join('|');
+        for (let i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; }
+        const heading = document.querySelector('h1,h2,h3');
+        return { sig: String(h), count: vis.length, heading: heading ? heading.textContent.replace(/\\s+/g,' ').trim().slice(0, 40) : '' };
+      })()`).catch(() => null);
+      if (!info) return null;
+      if (seenSig.has(info.sig)) return { dup: true };
+      seenSig.add(info.sig);
+      const tree = await page.evaluate(`(() => {
+        const lib = ${libSrc};
+        const root = document.body;
+        return lib.buildTree(root, null, 0);
+      })()`).catch(() => null);
+      const interactions = await page.evaluate(libSrc + '.interactiveList()').catch(() => []);
+      const shot = `screen-${String(screens.length).padStart(2, '0')}.png`;
+      await page.screenshot({ path: path.join(outDir, shot) }).catch(() => {});
+      return { name, entry: entryText, heading: info.heading, elementCount: info.count, sig: info.sig, shot, tree, interactions };
+    }
+
+    // 初始屏
+    const s0 = await captureScreen('initial', null);
+    if (s0 && !s0.dup) screens.push(s0); else if (s0) screens.push({ ...s0, note: '与后续屏幕签名重复' });
+
+    // 入口收集与点击句柄使用同一选择器，保证索引对齐
+    const ENTRY_SEL = '.nav-item, [role="tab"], [data-view], [data-screen], [data-page], [class*="nav-item"], nav a[href^="#"]';
+    const entryTexts = await page.evaluate(`(() => {
+      return Array.from(document.querySelectorAll('${ENTRY_SEL}')).map(el => (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 24));
+    })()`).catch(() => []);
+    const entryHandles = await page.$$(ENTRY_SEL);
+    let clicked = 0;
+    for (let i = 0; i < entryTexts.length; i++) {
+      if (screens.length >= MAX_SCREENS) break;
+      // 关键：每次点击前重新查询句柄 —— 导航点击常导致整棵 DOM 重建，预取句柄会失效
+      let handle = null;
+      for (let attempt = 0; attempt < 2 && !handle; attempt++) {
+        const fresh = await page.$$(ENTRY_SEL);
+        handle = fresh[i] || null;
+      }
+      if (!handle) continue;
+      try { await handle.click({ timeout: 2000 }); } catch (err) { if (process.env.DEBUG) console.error('[entry-click-fail]', i, String(err).slice(0, 80)); continue; }
+      clicked++;
+      await page.waitForTimeout(320);
+      const sc = await captureScreen(entryTexts[i] || ('entry-' + i), entryTexts[i]);
+      if (process.env.DEBUG) console.error('[entry]', i, JSON.stringify(entryTexts[i]), '->', sc ? (sc.dup ? 'DUP' : 'PUSH ' + sc.elementCount + ' ' + (sc.heading || '')) : 'NULL');
+      if (sc && !sc.dup) screens.push(sc);
+    }
+
+    // ===== 汇总该页 =====
+    const meta = await page.evaluate(() => ({
+      title: document.title, url: location.href,
+      totalElements: document.querySelectorAll('*').length,
+      pageHeight: document.body ? document.body.scrollHeight : 0,
+      fonts: document.fonts ? document.fonts.size : -1,
+      stylesheets: document.styleSheets.length,
+    })).catch(() => ({}));
+
+    pages.push({
+      file: path.basename(file), ...meta, channel: channelUsed,
+      screens, overlays, css, theme,
+      themeToggled: !!theme.toggleFound,
+    });
+    await page.close();
+  }
+  await browser.close();
+
+  /* ===== output ===== */
+  const result = {
+    generatedAt: new Date().toISOString(),
+    tool: 'html-prototype-reader/capture',
+    viewport: `${VP_W}x${VP_H}`,
+    inputs: inputs.map(i => path.basename(i)),
+    fileComposition: null,
+    pages, failedRequests: failedReqs,
+    elapsedSec: Math.round((Date.now() - started) / 1000),
+  };
+
+  // 文件构成（裸读通道对照）
+  let totalBytes = 0, styleBytes = 0, scriptBytes = 0;
+  for (const f of inputs) {
+    const src = fs.readFileSync(f, 'utf8'); totalBytes += Buffer.byteLength(src);
+    styleBytes += (src.match(/<style[^>]*>[\s\S]*?<\/style>/gi) || []).reduce((n, s) => n + Buffer.byteLength(s), 0);
+    scriptBytes += (src.match(/<script[^>]*>[\s\S]*?<\/script>/gi) || []).reduce((n, s) => n + Buffer.byteLength(s), 0);
+  }
+  result.fileComposition = { bytes: totalBytes, estTokens: Math.round(totalBytes / 3.5), styleBytes, scriptBytes, markupBytes: Math.max(0, totalBytes - styleBytes - scriptBytes) };
+
+  fs.writeFileSync(path.join(outDir, 'prototype.json'), JSON.stringify(result, null, 1));
+
+  // summary.md（agent 首读入口）
+  const L = [];
+  L.push(`# 原型捕获摘要（html-prototype-reader）`);
+  L.push('');
+  L.push(`- 输入：${result.inputs.join(', ')}　视口：${result.viewport}　耗时：${result.elapsedSec}s`);
+  L.push(`- 文件构成：总计 ${(totalBytes / 1024).toFixed(0)}KB（≈${result.fileComposition.estTokens.toLocaleString()} token）= 标记 ${(result.fileComposition.markupBytes / 1024).toFixed(1)}KB + CSS ${(styleBytes / 1024).toFixed(0)}KB + JS ${(scriptBytes / 1024).toFixed(0)}KB`);
+  L.push('');
+  for (const p of pages) {
+    L.push(`## ${p.file} — ${p.title || ''}`);
+    if (p.error) { L.push(`- ⚠️ 加载失败：${p.error}`); continue; }
+    L.push(`- 屏幕：${p.screens.length} 个（${p.screens.map(s => `${s.name || s.heading || '?'}(${s.elementCount}元素)`).join('、')}）`);
+    L.push(`- 覆盖层（弹窗/抽屉/Toast）：${(p.overlays || []).length} 个${(p.overlays || []).filter(o => o.hiddenNow).length ? `，其中 ${(p.overlays || []).filter(o => o.hiddenNow).length} 个当前隐藏（结构已在 prototype.json 中，触发后可见）` : ''}`);
+    if (p.css && p.css.breakpoints) L.push(`- 响应式断点：${p.css.breakpoints.join(' / ')}px（@media 块 ${p.css.mediaConditions.length} 个）`);
+    if (p.css) L.push(`- CSS 交互态：:hover ${p.css.hover} 条、:focus ${p.css.focus} 条、伪元素规则 ${p.css.pseudoRules} 条、@keyframes ${p.css.keyframes} 组；自定义属性定义 ${Object.keys(p.css.customPropsByState || {}).length} 处`);
+    if (p.theme && p.theme.toggleFound) L.push(`- 主题切换：检测到，切换前后探针见 prototype.json（还原时两种状态都要覆盖）`);
+    if (p.css && p.css.fontFaces && p.css.fontFaces.length) L.push(`- @font-face：${p.css.fontFaces.length} 组（${p.css.fontFaces.map(f => f.family).join('、')}）`);
+    L.push(`- 资源加载失败：${failedReqs.filter(r => r.page === p.file).length} 项`);
+    L.push('');
+    L.push(`| 屏幕 | 元素数 | 交互元素 | 截图 |`);
+    L.push(`|---|---|---|---|`);
+    for (const s of p.screens) L.push(`| ${s.name || s.heading || '-'} | ${s.elementCount} | ${(s.interactions || []).length} | ${s.shot} |`);
+    L.push('');
+  }
+  if (failedReqs.length) { L.push(`## 资源加载失败清单`); for (const r of failedReqs.slice(0, 20)) L.push(`- ${r.page}: ${r.err} — ${r.url}`); }
+  L.push('');
+  L.push(`## 使用方式（给还原 agent）`);
+  L.push(`1. 先看各屏截图建立视觉基准；2. 再读 prototype.json 中对应 screen 的 tree（组件树，含折叠 rep 标记与父级 diff 后的样式 s）；3. 交互元素逐条对照 interactions；4. 隐藏覆盖层结构在 overlays；5. 还原时覆盖全部断点与主题态。`);
+  fs.writeFileSync(path.join(outDir, 'summary.md'), L.join('\n'));
+
+  console.log(JSON.stringify({
+    ok: true, outDir, pages: pages.length,
+    screens: pages.reduce((n, p) => n + (p.screens ? p.screens.length : 0), 0),
+    overlays: pages.reduce((n, p) => n + (p.overlays ? p.overlays.length : 0), 0),
+    failedRequests: failedReqs.length, elapsedSec: result.elapsedSec,
+  }, null, 2));
+})().catch(e => { console.error('FATAL', e); process.exit(1); });
