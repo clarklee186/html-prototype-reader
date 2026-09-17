@@ -22,6 +22,10 @@ Page level:
 | `pages[].deadContent` | Multi-version / dead-content report: `css` (`staticChecked`, `matchedNow`, `dormantCount/Samples` — tokens seen on other screens, `notSeenInCaptureCount/Samples` — never seen during capture, may activate on unvisited screens, theme states or deep entries), `duplicateIds`, `versionResidueClasses` (`-old` / `-v2` / `-backup` patterns), `hiddenBranches` (label, subtree size, interactive count) |
 | `pages[]` | `entriesFound`, `entriesClicked`, `failedRequests`, page title/height, channel used |
 | `fileComposition` | Total bytes, token estimate, markup/CSS/JS split — decides whether naive reading was ever viable |
+| `schemaVersion` | Artifact schema version (bump on breaking field changes) |
+| `warnings[]` | Every degraded step (`page`, `stage`, `message`) — empty means nothing was silently skipped. Also mirrored per page |
+| `externalHosts` | Hosts the prototype requested beyond file/localhost — a security signal; `--no-network` blocks them |
+| `options` | Effective run options (viewport, maxScreens, timeoutMs, shotFormat, noNetwork) |
 
 Component tree node fields:
 
@@ -54,4 +58,6 @@ Component tree node fields:
 | `diff-report.md` | **Read first**: ratio overview, hotspot table labelled by document outline, style-mismatch list, missing classes/text/interactions |
 | `diff-overlay.png` | Difference overlay with differing pixels in red |
 | `prototype.png` / `restored.png` | The two screenshots actually compared |
-| `diff.json` | Full data: pixel stats, structure diff, hotspots, failed requests |
+| `diff.json` | Full data: pixel stats (incl. `truncated` / `fullHeight` / `overlay`), structure diff, hotspots, warnings, failed requests |
+
+`diff.json` also carries `schemaVersion`, `structureOk`, `warnings[]` and `pixelSkipped`. When a dimension could not be measured, `structure` / `pixel` are `null` (never zeros) and the process exits with code 2.

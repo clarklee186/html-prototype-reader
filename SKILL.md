@@ -23,16 +23,18 @@ description: 完整读取设计工具导出的 HTML 原型（单页/多页/JS �
 ```bash
 # ① 捕获原型 → 结构化事实
 node <本skill目录>/scripts/capture.js \
-  "<html文件或目录>" "<输出目录>" [--viewport 1440x900] [--max-screens 30] [--timeout 45000]
+  "<html文件或目录>" "<输出目录>" [--viewport 1440x900] [--max-screens 30] [--timeout 45000] [--shot-format png|jpeg] [--no-network]
 
 # ② 验收 diff：还原结果 vs 原型（两边都可以是本地文件或 http(s) URL）
 node <本skill目录>/scripts/diff.js \
-  "<原型.html|URL>" "<还原.html|URL>" "<输出目录>" [--viewport 1440x900] [--threshold 32] [--block 100]
+  "<原型.html|URL>" "<还原.html|URL>" "<输出目录>" [--viewport 1440x900] [--threshold 32] [--block 100] [--max-height 12000] [--overlay-format png|jpeg]
 ```
 
 - 脚本自动尝试本机 Chrome → Edge → bundled Chromium，无需下载浏览器；diff 需要 `--allow-file-access-from-files`（脚本已带）
 - 脚本按顺序解析 playwright-core：① 当前 NODE_PATH ② 本机托管 node 工作区（`~/.workbuddy/binaries/node/workspace/node_modules`）③ 同级 node_modules。都没有时先安装：`npm i playwright-core`（装进上述任一位置即可）
 - 输入为目录时按文件名序逐页处理（多页原型）
+- 安全边界：脚本用 `--allow-file-access-from-files` 启动（file:// 下读 canvas 与同源 iframe 需要），因此**只应对可信原型运行**；来源不可信时加 `--no-network` 阻断外发（summary 会列出原型请求过的外部主机）
+- 失败不静默：产物带 `schemaVersion` 与 `warnings[]`，diff 未测到的维度为 `null`（不是 0）且退出码 2——「未测到」绝不等于「通过」
 - DEBUG=1 可看 capture 逐屏捕获日志
 
 本机（WorkBuddy 环境）可直接用的示例：
@@ -110,5 +112,6 @@ fileComposition            字节构成（标记/CSS/JS）与 token 估算 —�
 - 2026-09-17 增加验收 diff 脚本（diff.js）：零 npm 依赖，像素比对在浏览器 canvas 内完成（需 --allow-file-access-from-files）；类样式按频次采样 250 类逐属性对比；变异实测（主色/圆角变量）能定位到具体类+属性+值。
 - 2026-09-17 **v1.0.1 修复**：① 同源 iframe 递归提取落地（深度上限 2，file:// 也生效）；② capture 截图前冻结动画/过渡，分屏截图可复现；③ 抽出 `shared.js` 作为 STYLE_PROPS / DIFF_PROPS / FREEZE_CSS / LAUNCH_ARGS / IFRAME_DEPTH_LIMIT 单一真理源（此前 capture 40+ 属性 vs diff 14 属性两份清单已漂移）；④ 去掉脚本内硬编码用户路径（改 os.homedir() 派生）；⑤ 清理死代码（无用句柄预取、无效 filter）、补 entriesFound/entriesClicked/iframe 统计进 summary；⑥ 热区标注改为取最小包含区间，不再被整页容器吃掉；⑦ 补 .gitignore / package.json（engines + npm scripts）。
 - 2026-09-17 **v1.0.5 组件状态覆盖补全**：覆盖矩阵 7/24 → 24/24（fixture：checkbox/radio/单选多选 select/搜索框/textarea/range/number/details/dialog 开与关/自定义 switch·slider/aria-pressed/contenteditable/datalist/离屏抽屉）。根因是 attribute vs property：JS 设值不更新 attribute（el.value/el.checked/el.selected/el.open 读 property）；补 aria-checked/aria-selected/aria-expanded/aria-pressed/aria-valuenow 等状态属性、select 的 options/selectedOptions/multiple、indeterminate、contenteditable 文本、dialog/details 的 open、progress/meter 的 value/max；interactiveList 增 DIALOG/DETAILS/OPTION/PROGRESS/METER/isContentEditable 与 offViewport 标记（off-canvas 抽屉，按文档流范围判断，避免把普通滚动内容误标）。
+- 2026-09-17 **v1.1.0 工程化与可靠性加固**（代码审查后全量修复）：① diff 快照/页面加载失败不再静默降级为零差异——`structure`/`pixel` 置 `null` + 报告顶部告警 + 退出码 2；② 两脚本 try/finally 释放浏览器（此前异常路径会泄漏 Chrome 进程）；③ 统一 `warnings[]` 降级通道（29 处静默吞错改为可追溯）+ `schemaVersion`；④ 安全边界：新增 `--no-network` 与 `externalHosts` 记录，文档声明信任边界；⑤ diff 分带比对（`--max-height` 默认 12000）：三份全尺寸位图 → 单带缓冲，22200px 页面峰值内存约从 1GB 降到 50MB；⑥ 性能：页内库单次注入 `window.__hprLib`（原每屏 7 次重注入）、每元素样式解析 5 次→3 次 ≈ 捕获 9s→6s；⑦ 结构：`scripts/inpage-lib.js` 独立成文件（可 node --check）、`shared.js` 增 `TUNING`/`SCHEMA_VERSION`；⑧ diff 文本与交互差异改多重集（重复标签不再折叠）；⑨ 截图与差异覆盖层支持 jpeg；⑩ 测试入仓：`npm test`（组件矩阵 24 断言 + 验收链路 + 仓库一致性）+ CI（ubuntu/windows）。
 - 2026-09-17 **v1.0.4 新增 dead-content 报告**：AI 生成原型常多版本内容共存（实测 1,424 条 CSS 规则中 1,030 条任一时刻休眠；605 button/285 input 藏在 JS 模板字符串）。capture 遍历后汇总各屏 token 并集，输出 pages[].deadContent：死 CSS 三分类（matchedNow / dormant=token 在其他屏出现过 / notSeenInCapture=捕获中从未出现，可能在未访问屏幕或主题态激活）、重复 id、版本残留类名（-old/-v2/-backup 模式）、隐藏分支（排除 head/script 等天然隐藏标签，父级可见才算分支根）。实现要点：token 并集与 attrsText 在 captureScreen 内收集（attrsText 上限 400KB）。
 - 关键坑（已修）：① 动态原型点击导航会整树重建 DOM，**句柄必须每轮重新查询**，预取会报 "Element is not attached"；② 伪元素必须按 content!=='none' 且记录 position，content:'' 的装饰层不能排除；③ 断点提取 parseFloat 去 'px'；④ **Playwright evaluate 传"字符串函数表达式 + 解构参数"会按表达式求值返回 undefined，必须传真实函数对象**（diff.js 的 COMPARE_FN）；⑤ 截图确定性：两侧共用同一份 FREEZE_CSS（用 transition-duration 0.001s 而非 transition:none，避免依赖 transitionend 的原型失去内容）。

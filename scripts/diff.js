@@ -30,13 +30,26 @@ function loadPlaywright() {
 }
 const { chromium } = loadPlaywright();
 
+/* 共享常量（必须在 CLI 解析之前 require，MAX_HEIGHT 默认值依赖 TUNING） */
+const { FREEZE_CSS, DIFF_PROPS, LAUNCH_ARGS, TUNING, SCHEMA_VERSION } = require('./shared');
+
+/* ---------- 降级记录 ---------- */
+const warnings = [];
+function warn(stage, err) {
+  const message = String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 200);
+  warnings.push({ stage, message });
+  console.error('[warn]', stage, message);
+}
+
 const argv = process.argv.slice(2);
 const protoArg = argv[0], restArg = argv[1], outDir = argv[2];
-if (!protoArg || !restArg || !outDir) { console.error('用法: node diff.js <原型> <还原> <输出目录> [--viewport 1440x900] [--threshold 32] [--block 100]'); process.exit(1); }
+if (!protoArg || !restArg || !outDir) { console.error('用法: node diff.js <原型> <还原> <输出目录> [--viewport 1440x900] [--threshold 32] [--block 100] [--max-height 12000] [--overlay-format png|jpeg]'); process.exit(1); }
 function opt(name, def) { const i = argv.indexOf('--' + name); return i >= 0 && argv[i + 1] ? argv[i + 1] : def; }
 const [VP_W, VP_H] = String(opt('viewport', '1440x900')).split('x').map(Number);
 const THRESHOLD = parseInt(opt('threshold', '32'), 10);
 const BLOCK = parseInt(opt('block', '100'), 10);
+const MAX_HEIGHT = parseInt(opt('max-height', String(TUNING.compareMaxHeightPx)), 10);   // 超过则截断比对并标注
+const OVERLAY_FORMAT = String(opt('overlay-format', 'png')).toLowerCase() === 'jpeg' ? 'jpeg' : 'png';
 fs.mkdirSync(outDir, { recursive: true });
 const OUT = path.resolve(outDir); // 后续全部用绝对路径，避免相对路径在 file:// 下解析错误
 
@@ -44,7 +57,6 @@ const toUrl = p => /^https?:\/\//.test(p) ? p : 'file:///' + path.resolve(p).rep
 const PROTO_URL = toUrl(protoArg), REST_URL = toUrl(restArg);
 
 /* 冻结动画/过渡与启动参数：与 capture.js 共用共享模块，避免两侧基准漂移 */
-const { FREEZE_CSS, DIFF_PROPS, LAUNCH_ARGS } = require('./shared');
 
 /* 页内快照：结构 + 类样式样本 + 文本 + 交互元素 + 分区 */
 const SNAPSHOT_FN = `(() => {
@@ -97,80 +109,118 @@ const SNAPSHOT_FN = `(() => {
 
 /* 页内像素对比：canvas 读两张 PNG，逐像素阈值比对，输出 diff 覆盖层
    注意：必须传真实函数对象（Playwright 对"字符串函数表达式 + 解构参数"会按表达式求值返回 undefined） */
-async function COMPARE_FN({ aUrl, bUrl, T, BLOCK }) {
+async function COMPARE_FN({ aUrl, bUrl, T, BLOCK, bandPx, maxH, overlayFormat }) {
   const load = src => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('img load fail: ' + src)); im.src = src; });
   const imgA = await load(aUrl); const imgB = await load(bUrl);
-  const W = Math.min(imgA.width, imgB.width), H = Math.min(imgA.height, imgB.height);
+  const W = Math.min(imgA.width, imgB.width);
+  const HFull = Math.min(imgA.height, imgB.height);
+  const H = Math.min(HFull, maxH);            // 超高页面截断，避免一次性驻留三份全尺寸位图
+  const band = Math.max(400, bandPx);
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const cx = cv.getContext('2d', { willReadFrequently: true });
-  cx.drawImage(imgA, 0, 0); const A = cx.getImageData(0, 0, W, H).data;
-  cx.clearRect(0, 0, W, H); cx.drawImage(imgB, 0, 0); const B = cx.getImageData(0, 0, W, H).data;
-  const out = cx.createImageData(W, H); out.data.set(A);
+  const bc = document.createElement('canvas');
   const blocks = new Map(); let diff = 0;
-  for (let y = 0; y < H; y++) {
-    const row = y * W;
-    for (let x = 0; x < W; x++) {
-      const i = (row + x) * 4;
-      const d = Math.max(Math.abs(A[i] - B[i]), Math.abs(A[i + 1] - B[i + 1]), Math.abs(A[i + 2] - B[i + 2]));
-      if (d > T) {
-        diff++;
-        const k = ((x / BLOCK) | 0) + ':' + ((y / BLOCK) | 0);
-        blocks.set(k, (blocks.get(k) || 0) + 1);
-        out.data[i] = 255; out.data[i + 1] = 0; out.data[i + 2] = 64; out.data[i + 3] = 220;
+  for (let y0 = 0; y0 < H; y0 += band) {
+    const h = Math.min(band, H - y0);
+    bc.width = W; bc.height = h;                                  // 重置即释放上一带缓冲
+    const bx = bc.getContext('2d', { willReadFrequently: true });
+    bx.drawImage(imgA, 0, y0, W, h, 0, 0, W, h);
+    const A = bx.getImageData(0, 0, W, h).data;
+    bx.clearRect(0, 0, W, h);
+    bx.drawImage(imgB, 0, y0, W, h, 0, 0, W, h);
+    const B = bx.getImageData(0, 0, W, h).data;
+    const out = bx.createImageData(W, h); out.data.set(A);
+    for (let y = 0; y < h; y++) {
+      const row = y * W;
+      for (let x = 0; x < W; x++) {
+        const i = (row + x) * 4;
+        const d = Math.max(Math.abs(A[i] - B[i]), Math.abs(A[i + 1] - B[i + 1]), Math.abs(A[i + 2] - B[i + 2]));
+        if (d > T) {
+          diff++;
+          const k = ((x / BLOCK) | 0) + ':' + (((y0 + y) / BLOCK) | 0);
+          blocks.set(k, (blocks.get(k) || 0) + 1);
+          out.data[i] = 255; out.data[i + 1] = 0; out.data[i + 2] = 64; out.data[i + 3] = 220;
+        }
       }
     }
+    bx.putImageData(out, 0, 0);
+    cx.drawImage(bc, 0, y0);
   }
-  cx.putImageData(out, 0, 0);
   return {
-    W, H, aW: imgA.width, aH: imgA.height, bW: imgB.width, bH: imgB.height,
+    W, H, HFull, truncated: HFull > H,
+    aW: imgA.width, aH: imgA.height, bW: imgB.width, bH: imgB.height,
     diffPixels: diff, ratio: diff / (W * H),
-    blocks: Array.from(blocks, ([k, n]) => { const [bx, by] = k.split(':').map(Number); return { bx, by, n, ratio: n / (BLOCK * BLOCK) }; }),
-    diffDataUrl: cv.toDataURL('image/png'),
+    blocks: Array.from(blocks, ([k, n]) => { const [bx2, by] = k.split(':').map(Number); return { bx: bx2, by, n, ratio: n / (BLOCK * BLOCK) }; }),
+    diffDataUrl: cv.toDataURL(overlayFormat === 'jpeg' ? 'image/jpeg' : 'image/png', 0.9),
   };
 }
 
 (async () => {
   const started = Date.now();
-  let browser = null, channelUsed = null;
+  let browser = null;
+  try {
+  let channelUsed = null;
   for (const channel of ['chrome', 'msedge', undefined]) {
     try {
       browser = await chromium.launch(channel ? { channel, headless: true, args: LAUNCH_ARGS } : { headless: true, args: LAUNCH_ARGS });
       channelUsed = channel || 'bundled-chromium'; break;
     } catch (e) { /* next */ }
   }
-  if (!browser) { console.error('无法启动浏览器'); process.exit(3); }
+  if (!browser) { console.error('无法启动浏览器'); process.exitCode = 3; return; }
 
   const failedReqs = [];
   async function loadAndShoot(url, shotPath, label) {
     const page = await browser.newPage({ viewport: { width: VP_W, height: VP_H } });
     page.on('requestfailed', r => failedReqs.push({ side: label, url: r.url().slice(0, 180), err: r.failure() && r.failure().errorText }));
     page.on('response', r => { if (r.status() >= 400) failedReqs.push({ side: label, url: r.url().slice(0, 180), err: 'HTTP ' + r.status() }); });
-    try { await page.goto(url, { waitUntil: 'load', timeout: 45000 }); } catch (e) { await page.close(); throw new Error(label + ' 加载失败: ' + String(e).slice(0, 120)); }
+    try { await page.goto(url, { waitUntil: 'load', timeout: 45000 }); }
+    catch (e) { await page.close(); warn(label + ':goto', e); return { ok: false, error: label + ' 加载失败: ' + String(e).slice(0, 160), snapshot: {} }; }
     try { await page.waitForLoadState('networkidle', { timeout: 5000 }); } catch (e) { /* */ }
-    await page.addStyleTag({ content: FREEZE_CSS }).catch(() => {});
-    await page.evaluate(() => { const RealIO = window.IntersectionObserver; if (RealIO) window.IntersectionObserver = class extends RealIO { constructor(cb, o) { super(cb, o); setTimeout(() => { try { cb([{ isIntersecting: true, target: document.body }], this); } catch (e) {} }, 0); } }; document.querySelectorAll('img[loading="lazy"]').forEach(i => { i.loading = 'eager'; }); }).catch(() => {});
-    await page.evaluate(async () => { await new Promise(res => { let y = 0; const t = setInterval(() => { y += 800; window.scrollTo(0, y); if (y >= (document.body ? document.body.scrollHeight : 0)) { clearInterval(t); window.scrollTo(0, 0); res(); } }, 35); }); }).catch(() => {});
-    await page.waitForTimeout(400);
-    const snapshot = await page.evaluate(SNAPSHOT_FN.replace('%DIFF_PROPS%', JSON.stringify(DIFF_PROPS))).catch(e => ({ error: String(e).slice(0, 120) }));
-    await page.screenshot({ path: shotPath, fullPage: true });
+    await page.addStyleTag({ content: FREEZE_CSS }).catch(e => warn(label + ':freeze-css', e));
+    await page.evaluate(() => { const RealIO = window.IntersectionObserver; if (RealIO) window.IntersectionObserver = class extends RealIO { constructor(cb, o) { super(cb, o); setTimeout(() => { try { cb([{ isIntersecting: true, target: document.body }], this); } catch (e) {} }, 0); } }; document.querySelectorAll('img[loading="lazy"]').forEach(i => { i.loading = 'eager'; }); }).catch(e => warn(label + ':anti-lazy', e));
+    await page.evaluate(async ({ step, interval }) => { await new Promise(res => { let y = 0; const t = setInterval(() => { y += step; window.scrollTo(0, y); if (y >= (document.body ? document.body.scrollHeight : 0)) { clearInterval(t); window.scrollTo(0, 0); res(); } }, interval); }); }, { step: TUNING.scrollStepPx, interval: TUNING.scrollIntervalMs }).catch(e => warn(label + ':scroll', e));
+    await page.waitForTimeout(TUNING.settleAfterLoadMs);
+    // 结构快照：失败重试一次；仍失败则显式标记（绝不静默降级为"零差异"）
+    let snapshot = null, snapErr = null;
+    for (let attempt = 0; attempt <= TUNING.compareRetry; attempt++) {
+      snapshot = await page.evaluate(SNAPSHOT_FN.replace('%DIFF_PROPS%', JSON.stringify(DIFF_PROPS))).catch(e => { snapErr = e; return null; });
+      if (snapshot) break;
+    }
+    await page.screenshot({ path: shotPath, fullPage: true }).catch(e => { warn(label + ':screenshot', e); });
     await page.close();
-    return snapshot;
+    if (!snapshot) {
+      warn(label + ':snapshot', snapErr || new Error('结构快照返回空'));
+      return { ok: false, error: String((snapErr && snapErr.message) || snapErr).slice(0, 200), snapshot: {} };
+    }
+    return { ok: true, snapshot };
   }
 
   const shotA = path.join(OUT, 'prototype.png');
   const shotB = path.join(OUT, 'restored.png');
-  const snapA = await loadAndShoot(PROTO_URL, shotA, 'prototype');
-  const snapB = await loadAndShoot(REST_URL, shotB, 'restored');
+  const rA = await loadAndShoot(PROTO_URL, shotA, 'prototype');
+  const rB = await loadAndShoot(REST_URL, shotB, 'restored');
+  const snapA = rA.snapshot, snapB = rB.snapshot;
+  const structureOk = rA.ok && rB.ok;   // false 时结构维度一律置 null，并在报告顶部告警
 
   // 像素对比（在 file:// 源上执行 canvas 读取，已加 --allow-file-access-from-files）
-  const cmpPage = await browser.newPage({ viewport: { width: VP_W, height: VP_H } });
-  await cmpPage.goto('file:///' + shotA.replace(/\\/g, '/'), { waitUntil: 'load' });
-  const cmp = await cmpPage.evaluate(COMPARE_FN, { aUrl: 'file:///' + shotA.replace(/\\/g, '/'), bUrl: 'file:///' + shotB.replace(/\\/g, '/'), T: THRESHOLD, BLOCK });
-  // diff 覆盖层落盘
-  const b64 = cmp.diffDataUrl.split(',')[1];
-  fs.writeFileSync(path.join(OUT, 'diff-overlay.png'), Buffer.from(b64, 'base64'));
-  await cmpPage.close();
-  await browser.close();
+  // 任一侧加载失败则跳过，避免用不存在的截图做二次失败；覆盖层文件名在下方报告中使用
+  let cmp = null, overlayName = null;
+  if (rA.ok && rB.ok) {
+    const cmpPage = await browser.newPage({ viewport: { width: VP_W, height: VP_H } });
+    await cmpPage.goto('file:///' + shotA.replace(/\\/g, '/'), { waitUntil: 'load' });
+    cmp = await cmpPage.evaluate(COMPARE_FN, {
+      aUrl: 'file:///' + shotA.replace(/\\/g, '/'), bUrl: 'file:///' + shotB.replace(/\\/g, '/'),
+      T: THRESHOLD, BLOCK, bandPx: TUNING.compareBandPx, maxH: MAX_HEIGHT, overlayFormat: OVERLAY_FORMAT,
+    }).catch(e => { warn('pixel:compare', e); return null; });
+    if (cmp && cmp.truncated) warn('pixel:truncated', new Error(`页面高 ${cmp.HFull}px 超过 --max-height ${MAX_HEIGHT}px，仅比对前 ${cmp.H}px`));
+    if (cmp) {
+      overlayName = `diff-overlay.${OVERLAY_FORMAT === 'jpeg' ? 'jpg' : 'png'}`;
+      fs.writeFileSync(path.join(OUT, overlayName), Buffer.from(cmp.diffDataUrl.split(',')[1], 'base64'));
+    }
+    await cmpPage.close();
+  } else {
+    warn('pixel:skipped', new Error('任一侧加载失败，跳过像素比对'));
+  }
 
   /* ===== 结构差异（Node 侧） ===== */
   const norm = s => String(s || '').replace(/\s+/g, ' ').trim();
@@ -187,15 +237,22 @@ async function COMPARE_FN({ aUrl, bUrl, T, BLOCK }) {
     }
   }
   styleMismatches.sort((a, b) => (clsA[b.cls] || 0) - (clsA[a.cls] || 0));
-  const setT = arr => new Set(arr.map(norm));
-  const textsA = setT(snapA.texts || []), textsB = setT(snapB.texts || []);
-  const missingTexts = [...textsA].filter(t => !textsB.has(t));
-  const extraTexts = [...textsB].filter(t => !textsA.has(t));
+  // 多重集（Map<label, count>）：同一标签出现 10 次而还原侧只做 1 次也能被发现
+  const count = arr => { const m = new Map(); for (const raw of arr) { const k = norm(raw); m.set(k, (m.get(k) || 0) + 1); } return m; };
+  const diffCounts = (a, b) => {
+    const missing = [], extra = [];
+    for (const [k, n] of a) { const m = b.get(k) || 0; if (m < n) missing.push({ label: k, missing: n - m }); }
+    for (const [k, n] of b) { const m = a.get(k) || 0; if (m < n) extra.push({ label: k, extra: n - m }); }
+    return { missing: missing.sort((x, y) => y.missing - x.missing), extra: extra.sort((x, y) => y.extra - x.extra) };
+  };
   const labelOf = i => (i.tag || '') + (i.text ? '·' + i.text : '');
-  const interA = new Set((snapA.interactives || []).map(labelOf));
-  const interB = new Set((snapB.interactives || []).map(labelOf));
-  const missingInter = [...interA].filter(x => !interB.has(x));
-  const extraInter = [...interB].filter(x => !interA.has(x));
+  const textsA = count(snapA.texts || []), textsB = count(snapB.texts || []);
+  const textDiff = diffCounts(textsA, textsB);
+  const missingTexts = textDiff.missing, extraTexts = textDiff.extra;
+  const interA = count((snapA.interactives || []).map(labelOf)), interB = count((snapB.interactives || []).map(labelOf));
+  const interDiff = diffCounts(interA, interB);
+  const missingInter = interDiff.missing, extraInter = interDiff.extra;
+  const sumCounts = m => [...m.values()].reduce((n, x) => n + x, 0);
 
   // 热区 → 原型分区标注：优先取 y 之上最近的一个标题（文档大纲），否则回落到包含 y 的最小容器
   const sections = (snapA.sections || []).filter(s => Number.isFinite(s.y0));
@@ -211,24 +268,28 @@ async function COMPARE_FN({ aUrl, bUrl, T, BLOCK }) {
     for (const s of containers) { const d = Math.abs(y - s.y0); if (d < dist) { dist = d; best = s.label; } }
     return best || '?';
   };
-  const hotspots = (cmp.blocks || []).map(b => ({ yCenter: b.by * BLOCK + BLOCK / 2, xCenter: b.bx * BLOCK + BLOCK / 2, ...b, section: labelAt(b.by * BLOCK + BLOCK / 2) }))
-    .sort((a, b) => b.n - a.n).slice(0, 12);
+  const hotspots = cmp ? (cmp.blocks || []).map(b => ({ yCenter: b.by * BLOCK + BLOCK / 2, xCenter: b.bx * BLOCK + BLOCK / 2, ...b, section: labelAt(b.by * BLOCK + BLOCK / 2) }))
+    .sort((a, b) => b.n - a.n).slice(0, 12) : [];
 
   const result = {
+    schemaVersion: SCHEMA_VERSION,
     generatedAt: new Date().toISOString(), tool: 'html-prototype-reader/diff',
     viewport: `${VP_W}x${VP_H}`, threshold: THRESHOLD, block: BLOCK,
-    prototype: { input: protoArg, title: snapA.title, height: snapA.height, elementCount: snapA.elementCount },
-    restored: { input: restArg, title: snapB.title, height: snapB.height, elementCount: snapB.elementCount },
-    pixel: { width: cmp.W, height: cmp.H, comparedW: cmp.W, comparedH: cmp.H, protoSize: [cmp.aW, cmp.aH], restoredSize: [cmp.bW, cmp.bH], sizeMismatch: cmp.aW !== cmp.bW || cmp.aH !== cmp.bH, diffPixels: cmp.diffPixels, ratio: cmp.ratio, threshold: THRESHOLD },
-    structure: {
+    prototype: { input: protoArg, title: snapA.title, height: snapA.height, elementCount: snapA.elementCount, snapshotOk: rA.ok, error: rA.error },
+    restored: { input: restArg, title: snapB.title, height: snapB.height, elementCount: snapB.elementCount, snapshotOk: rB.ok, error: rB.error },
+    structureOk,
+    warnings,
+    pixel: cmp ? { width: cmp.W, height: cmp.H, comparedW: cmp.W, comparedH: cmp.H, truncated: cmp.truncated, fullHeight: cmp.HFull, protoSize: [cmp.aW, cmp.aH], restoredSize: [cmp.bW, cmp.bH], sizeMismatch: cmp.aW !== cmp.bW || cmp.aH !== cmp.bH, diffPixels: cmp.diffPixels, ratio: cmp.ratio, threshold: THRESHOLD, overlay: overlayName } : null,
+    pixelSkipped: !cmp,
+    structure: structureOk ? {
       missingClasses: missingClasses.slice(0, 40).map(c => ({ cls: c, count: clsA[c] })), missingClassTotal: missingClasses.length,
       extraClasses: extraClasses.slice(0, 40).map(c => ({ cls: c, count: clsB[c] })), extraClassTotal: extraClasses.length,
       styleMismatches: styleMismatches.slice(0, 60), styleMismatchTotal: styleMismatches.length,
       missingTextCount: missingTexts.length, missingTexts: missingTexts.slice(0, 20),
       extraTextCount: extraTexts.length, extraTexts: extraTexts.slice(0, 20),
-      interactive: { protoCount: interA.size, restoredCount: interB.size, missingCount: missingInter.length, missing: missingInter.slice(0, 15), extraCount: extraInter.length, extra: extraInter.slice(0, 15) },
+      interactive: { protoCount: sumCounts(interA), restoredCount: sumCounts(interB), missingCount: missingInter.length, missing: missingInter.slice(0, 15), extraCount: extraInter.length, extra: extraInter.slice(0, 15) },
       heightDelta: (snapB.height || 0) - (snapA.height || 0),
-    },
+    } : null,
     hotspots, failedRequests: failedReqs,
     elapsedSec: Math.round((Date.now() - started) / 1000),
   };
@@ -239,6 +300,18 @@ async function COMPARE_FN({ aUrl, bUrl, T, BLOCK }) {
   const pct = r => (r * 100).toFixed(2) + '%';
   L.push(`# 还原验收报告（html-prototype-reader/diff）`);
   L.push('');
+  if (!cmp) {
+    L.push('');
+    L.push('> ❌ **像素维度未产出**（任一侧加载或截图失败），本次仅能给出结构维度结论，退出码 2。');
+  }
+  if (!structureOk) {
+    L.push('> ❌ **结构维度未产出**：' + [rA.ok ? null : '原型快照失败（' + (rA.error || '未知') + '）', rB.ok ? null : '还原快照失败（' + (rB.error || '未知') + '）'].filter(Boolean).join('；'));
+    L.push('> 下方结构差异一律为 **null（未测到）**，不是"没有差异"。像素维度是否可用见上一行；本次进程退出码 2。');
+    L.push('');
+  } else if (warnings.length) {
+    L.push(`> ⚠️ 本次验收有 ${warnings.length} 处降级，详见 diff.json 的 warnings`);
+    L.push('');
+  }
   L.push(`- 原型：${protoArg}（${snapA.title || ''}，高 ${snapA.height}px / ${snapA.elementCount} 元素）`);
   L.push(`- 还原：${restArg}（${snapB.title || ''}，高 ${snapB.height}px / ${snapB.elementCount} 元素）`);
   L.push(`- 视口 ${VP_W}x${VP_H}，像素阈值 ${THRESHOLD}，耗时 ${result.elapsedSec}s`);
@@ -247,8 +320,8 @@ async function COMPARE_FN({ aUrl, bUrl, T, BLOCK }) {
   L.push('');
   L.push(`| 维度 | 结果 |`);
   L.push(`|---|---|`);
-  L.push(`| 像素差异率 | **${pct(cmp.ratio)}**（${cmp.diffPixels.toLocaleString()} px / ${(cmp.W * cmp.H).toLocaleString()} px） |`);
-  L.push(`| 页面尺寸 | 原型 ${cmp.aW}×${cmp.aH} vs 还原 ${cmp.bW}×${cmp.bH}${result.pixel.sizeMismatch ? ' ⚠️ 尺寸不一致' : '（一致）'}；还原比原型${result.structure.heightDelta >= 0 ? '高' : '矮'} ${Math.abs(result.structure.heightDelta)}px |`);
+  L.push(cmp ? `| 像素差异率 | **${pct(cmp.ratio)}**（${cmp.diffPixels.toLocaleString()} px / ${(cmp.W * cmp.H).toLocaleString()} px） |` : `| 像素差异率 | 未产出（任一侧加载失败） |`);
+  if (cmp && result.structure) L.push(`| 页面尺寸 | 原型 ${cmp.aW}×${cmp.aH} vs 还原 ${cmp.bW}×${cmp.bH}${result.pixel.sizeMismatch ? ' ⚠️ 尺寸不一致' : '（一致）'}；还原比原型${result.structure.heightDelta >= 0 ? '高' : '矮'} ${Math.abs(result.structure.heightDelta)}px |`);
   L.push(`| 结构缺失类 | ${missingClasses.length} 个 |`);
   L.push(`| 多余类 | ${extraClasses.length} 个 |`);
   L.push(`| 样式不一致 | **${styleMismatches.length} 项**（${new Set(styleMismatches.map(m => m.cls)).size} 个类） |`);
@@ -282,7 +355,7 @@ async function COMPARE_FN({ aUrl, bUrl, T, BLOCK }) {
   if (missingTexts.length) {
     L.push(`## 缺失文本样例（前 20）`);
     L.push('');
-    for (const t of missingTexts.slice(0, 20)) L.push(`- ${t}`);
+    for (const t of missingTexts.slice(0, 20)) L.push(`- ${t.label}${t.missing > 1 ? `（缺 ${t.missing} 处）` : ''}`);
     L.push('');
   }
   if (missingInter.length) {
@@ -298,13 +371,18 @@ async function COMPARE_FN({ aUrl, bUrl, T, BLOCK }) {
   L.push(`- 本报告对比的是两边的**初始渲染态**；多屏原型请用 capture.js 逐屏参考，并对每个屏的还原结果分别跑 diff。`);
   L.push(`- 动画已冻结（animation-paused + transition:none），截图差异不包含动效时序。`);
   fs.writeFileSync(path.join(OUT, 'diff-report.md'), L.join('\n'));
+  if (!structureOk || !cmp) process.exitCode = 2;   // 未测到 ≠ 通过：交给调用方判定
 
   console.log(JSON.stringify({
-    ok: true, outDir, ratio: +cmp.ratio.toFixed(4),
+    ok: !!(cmp && structureOk), outDir, ratio: cmp ? +cmp.ratio.toFixed(4) : null, structureOk,
     styleMismatchTotal: styleMismatches.length, missingClassTotal: missingClasses.length, extraClassTotal: extraClasses.length,
     missingTextCount: missingTexts.length, extraTextCount: extraTexts.length,
-    interactive: result.structure.interactive.protoCount + '->' + result.structure.interactive.restoredCount,
-    sizeMismatch: result.pixel.sizeMismatch, heightDelta: result.structure.heightDelta,
+    interactive: result.structure ? (result.structure.interactive.protoCount + '->' + result.structure.interactive.restoredCount) : '未产出',
+    sizeMismatch: result.pixel ? result.pixel.sizeMismatch : null,
+    heightDelta: result.structure ? result.structure.heightDelta : null,
     failedRequests: failedReqs.length, elapsedSec: result.elapsedSec,
   }, null, 2));
-})().catch(e => { console.error('FATAL', e); process.exit(1); });
+  } finally {
+    if (browser) { try { await browser.close(); } catch (e) { /* 关闭失败不覆盖原始错误 */ } }
+  }
+})().catch(e => { console.error('FATAL', e); process.exitCode = 1; });

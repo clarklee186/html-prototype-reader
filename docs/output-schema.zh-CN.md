@@ -22,6 +22,10 @@
 | `pages[].deadContent` | 多版本 / 死内容报告：`css`（`staticChecked` 静态可判数、`matchedNow` 当前命中、`dormantCount/Samples` 休眠——token 在其他屏幕出现过、`notSeenInCaptureCount/Samples` 捕获中未出现——可能在未访问的屏幕、主题态或深层入口激活）、`duplicateIds` 重复 id、`versionResidueClasses` 版本残留类名（`-old` / `-v2` / `-backup` 模式）、`hiddenBranches` 隐藏分支（标签、子树规模、交互元素数） |
 | `pages[]` | `entriesFound`、`entriesClicked`、`failedRequests`、页面标题/高度、所用浏览器通道 |
 | `fileComposition` | 总字节、token 估算、标记/CSS/JS 占比——用来判断"裸读"是否本来可行 |
+| `schemaVersion` | 产物结构版本（破坏性字段变更时递增） |
+| `warnings[]` | 每一处降级（`page`/`stage`/`message`）——为空表示没有任何步骤被静默跳过；每页也有同名数组 |
+| `externalHosts` | 原型请求过的 file/localhost 之外的主机——安全信号；`--no-network` 可阻断 |
+| `options` | 本次生效的运行选项（viewport、maxScreens、timeoutMs、shotFormat、noNetwork） |
 
 组件树节点字段：
 
@@ -54,4 +58,6 @@
 | `diff-report.md` | **Agent 先读**：差异率总览、按文档大纲标注的热区表、样式不一致清单、缺失类/文本/交互 |
 | `diff-overlay.png` | 差异像素标红的覆盖层图 |
 | `prototype.png` / `restored.png` | 实际参与比对的两张截图 |
-| `diff.json` | 全量数据：像素统计、结构差异、热区、资源失败 |
+| `diff.json` | 全量数据：像素统计（含 `truncated`/`fullHeight`/`overlay`）、结构差异、热区、降级记录、资源失败 |
+
+`diff.json` 同时带 `schemaVersion`、`structureOk`、`warnings[]`、`pixelSkipped`。某维度未产出时 `structure`/`pixel` 为 `null`（不是 0），进程退出码 2。

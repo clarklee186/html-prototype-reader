@@ -70,7 +70,7 @@ Full option tables, interpretation thresholds and scenario advice: [docs/cli-ref
 
 ## Limits
 
-Deep interactions (modal contents, nested tabs, inline expansion) only exist after being triggered. Canvas bitmaps are not extracted, and cross-origin iframes record `src` only (same-origin frames are recursed to depth 2). Screen dedup is signature-based, so near-identical screens can merge — bounded by `--max-screens`. The multi-version report is bounded by traversal coverage too: CSS selectors belonging to screens the traversal never visited are reported as *not seen in capture*, not as dead.
+Deep interactions (modal contents, nested tabs, inline expansion) only exist after being triggered. Canvas bitmaps are not extracted, and cross-origin iframes record `src` only (same-origin frames are recursed to depth 2). Screen dedup is signature-based, so near-identical screens can merge — bounded by `--max-screens`. Prototypes are rendered with local file access enabled (needed to read canvases and same-origin iframes), so run it on trusted input only — pass `--no-network` for anything else, and capture lists the external hosts the prototype tried to reach. The multi-version report is bounded by traversal coverage too: CSS selectors belonging to screens the traversal never visited are reported as *not seen in capture*, not as dead.
 
 ## Proof
 
@@ -82,4 +82,4 @@ On a 783 KB multi-screen dashboard prototype (JS-assembled, dual theme, 45 `@med
 
 ## About the author
 
-Built and maintained by [Clark Lee (@clarklee186)](https://github.com/clarklee186). Issues and pull requests are welcome — [AGENTS.md](AGENTS.md) documents the invariants to keep in mind before changing anything.
+Built and maintained by [Clark Lee (@clarklee186)](https://github.com/clarklee186). Issues and pull requests are welcome — [AGENTS.md](AGENTS.md) documents the invariants to keep in mind before changing anything, and `npm i && npm test` runs the whole regression (component matrix, acceptance chain, repo consistency checks) locally.

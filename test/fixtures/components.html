@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>组件覆盖测试</title>
+<style>
+  body { font: 14px/1.6 sans-serif; margin: 0; padding: 20px; background: #fafafa; }
+  .row { margin: 10px 0; }
+  .drawer { position: fixed; left: 100%; top: 0; width: 320px; height: 100vh; background: #fff; box-shadow: -2px 0 8px rgba(0,0,0,.2); }
+  dialog { border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+  <h1>组件覆盖矩阵样本</h1>
+
+  <div class="row"><input type="checkbox" id="cb-attr" checked><label for="cb-attr">属性式勾选（HTML checked）</label></div>
+  <div class="row"><input type="checkbox" id="cb-js"><label for="cb-js">JS 式勾选 + 半选</label></div>
+  <div class="row">
+    <input type="radio" name="grp" id="r1"><label for="r1">选项一</label>
+    <input type="radio" name="grp" id="r2" checked><label for="r2">选项二（选中）</label>
+  </div>
+  <div class="row">
+    <select id="sel-single"><option value="a">选项 A</option><option value="b">选项 B</option><option value="c" selected>选项 C</option></select>
+    <select id="sel-multi" multiple size="4"><option value="m1">M1</option><option value="m2">M2</option><option value="m3">M3</option><option value="m4">M4</option></select>
+  </div>
+  <div class="row"><input type="search" id="q" placeholder="搜索…" value="初始值"><input list="dl" id="withdl" placeholder="带 datalist"><datalist id="dl"><option value="opt1"></option><option value="opt2"></option></datalist></div>
+  <div class="row"><textarea id="ta" rows="2" placeholder="备注"></textarea></div>
+  <div class="row"><input type="range" id="rg" min="0" max="100" value="10"><input type="number" id="num" value="42"></div>
+  <div class="row"><details id="acc"><summary>展开项（手风琴）</summary><p>手风琴内容</p></details></div>
+  <div class="row"><progress id="pg" value="70" max="100"></progress></div>
+  <div class="row"><div role="switch" id="sw" aria-checked="true" tabindex="0">自定义开关</div>
+    <button id="tgl" aria-pressed="true">切换按钮</button>
+    <div role="slider" id="sl" aria-valuenow="42" aria-valuemin="0" aria-valuemax="100" tabindex="0"></div></div>
+  <div class="row"><div contenteditable="true" id="ce">富文本编辑器内容</div></div>
+
+  <dialog id="dlg-open" open><p>已打开的原生对话框</p><button>确定</button></dialog>
+  <dialog id="dlg-closed"><p>未打开的对话框</p></dialog>
+  <aside class="drawer" id="drawer"><h3>抽屉内容</h3><button class="drawer-btn">抽屉按钮</button></aside>
+
+<script>
+  // JS 设置状态：attribute 不更新，只有 property 可读 —— 覆盖检查的关键
+  document.getElementById('cb-js').checked = true;
+  document.getElementById('cb-js').indeterminate = true;
+  const sm = document.getElementById('sel-multi');
+  sm.options[1].selected = true; sm.options[3].selected = true;
+  document.getElementById('q').value = 'AI 搜索词';
+  document.getElementById('ta').value = '多行备注内容\n第二行';
+  document.getElementById('rg').value = 77;
+  document.getElementById('acc').open = true;
+</script>
+</body>
+</html>

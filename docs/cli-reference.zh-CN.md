@@ -13,6 +13,9 @@ node scripts/capture.js <html文件或目录> <输出目录> [选项]
 | `--viewport WxH` | `1440x900` | 渲染视口；做移动端还原可设 `375x812` |
 | `--max-screens N` | `30` | 交互遍历的屏幕数上限，防止误点入口导致死循环 |
 | `--timeout ms` | `45000` | 页面加载超时 |
+| `--shot-format` | `png` | `png` 或 `jpeg`；后者在长页面上体积小得多 |
+| `--jpeg-quality N` | `82` | `--shot-format jpeg` 时的质量 |
+| `--no-network` | 关 | 阻断一切非 `file://`/localhost 请求（原型来源不可信时用） |
 | `DEBUG=1`（环境变量） | 关 | 输出逐屏捕获日志（入口命中 / 点击失败 / 去重结果），排查漏屏时开 |
 
 输入为目录时按文件名序逐页处理。
@@ -28,6 +31,18 @@ node scripts/diff.js <原型.html|URL> <还原.html|URL> <输出目录> [选项]
 | `--threshold N` | `32` | 像素差阈值（单通道最大差值），调高可容忍轻微抗锯齿噪声 |
 | `--block N` | `100` | 热区聚合块边长（px），调小可精确定位差异 |
 | `--viewport WxH` | `1440x900` | 两边必须同视口，否则尺寸不一致会进报告 |
+| `--max-height px` | `12000` | 超过该高度按分带比对至上限，报告标注已截断 |
+| `--overlay-format` | `png` | `png` 或 `jpeg` |
+
+## 降级与退出码
+
+两个工具都会把每一处降级记录到 `warnings[]`（并在 `summary.md` / `diff-report.md` 顶部列出），产物带 `schemaVersion`。
+
+| 退出码 | 含义 |
+|---|---|
+| 0 | 已测量且未发现问题 |
+| 2 | 某个维度未产出（快照失败或页面加载失败）——`structure` / `pixel` 为 `null` 而非 0。**不等于通过。** |
+| 1 / 3 | 工具级失败（参数错误、无可用浏览器） |
 
 ## 判读口径
 

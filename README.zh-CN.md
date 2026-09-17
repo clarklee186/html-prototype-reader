@@ -70,7 +70,7 @@ node scripts/diff.js    <原型|URL>      <还原|URL>    <输出目录> [--view
 
 ## 已知边界
 
-深层交互（弹窗内容、tab 嵌套、行内展开态）只有被触发后才存在。Canvas 位图不提取，跨域 iframe 只记录 `src`（同源 iframe 递归至深度 2）。屏幕去重基于签名，极相似屏幕可能被合并——由 `--max-screens` 兜底。 多版本报告同样受遍历覆盖面约束：遍历未访问屏幕的选择器会报告为「捕获中未出现」，而不是「死内容」。
+深层交互（弹窗内容、tab 嵌套、行内展开态）只有被触发后才存在。Canvas 位图不提取，跨域 iframe 只记录 `src`（同源 iframe 递归至深度 2）。屏幕去重基于签名，极相似屏幕可能被合并——由 `--max-screens` 兜底。 渲染时开启了本地文件访问（读 canvas 与同源 iframe 必需），因此**只应对可信原型运行**——其他来源请加 `--no-network`，capture 会列出原型尝试访问的外部主机。多版本报告同样受遍历覆盖面约束：遍历未访问屏幕的选择器会报告为「捕获中未出现」，而不是「死内容」。
 
 ## 可信产物
 
@@ -82,4 +82,4 @@ node scripts/diff.js    <原型|URL>      <还原|URL>    <输出目录> [--view
 
 ## 关于作者
 
-由 [Clark Lee (@clarklee186)](https://github.com/clarklee186) 构建与维护。欢迎提 Issue 与 PR——改动前请先读 [AGENTS.md](AGENTS.md)，里面记录了必须守住的那些不变量。
+由 [Clark Lee (@clarklee186)](https://github.com/clarklee186) 构建与维护。欢迎提 Issue 与 PR——改动前请先读 [AGENTS.md](AGENTS.md)，里面记录了必须守住的那些不变量；本地执行 `npm i && npm test` 即可跑完整回归（组件矩阵、验收链路、仓库一致性检查）。

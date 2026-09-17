@@ -1,6 +1,6 @@
 {
   "name": "html-prototype-reader",
-  "version": "1.0.6",
+  "version": "1.1.0",
   "description": "Render-based HTML prototype reader for AI agents: component tree + computed styles + interactions extraction, and acceptance diff (pixel + structural).",
   "license": "MIT",
   "private": true,
@@ -9,7 +9,10 @@
   },
   "scripts": {
     "capture": "node scripts/capture.js",
-    "diff": "node scripts/diff.js"
+    "diff": "node scripts/diff.js",
+    "test": "node test/run-tests.js",
+    "check-meta": "node scripts/check-meta.js",
+    "check-docs": "node scripts/check-docs.js"
   },
   "peerDependencies": {
     "playwright-core": ">=1.40.0"
@@ -27,5 +30,19 @@
     "frontend",
     "playwright",
     "visual-diff"
+  ],
+  "devDependencies": {
+    "playwright-core": "^1.40.0"
+  },
+  "files": [
+    "SKILL.md",
+    "_meta.json",
+    "scripts/",
+    "README.md",
+    "README.zh-CN.md",
+    "docs/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "LICENSE"
   ]
 }
