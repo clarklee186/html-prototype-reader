@@ -32,7 +32,7 @@ It exists because an agent that reads HTML source is reading a description of a 
 
 <img src="assets/features.webp" alt="Read every screen, turn mismatches into work orders, run with zero dependencies" width="100%">
 
-A structured `prototype.json` (component tree, style diffs, interactions, breakpoints, theme states, overlays, iframe subtrees), a `summary.md` for the agent to read first, a screenshot per screen, and — after restoration — a `diff-report.md` with a pixel-difference ratio, labelled hotspots and a style-mismatch list. AI-generated prototypes often keep several versions alive at once; capture reports that too: dormant and never-seen CSS selectors, hidden branches, duplicate ids and version-residue class names, so the restoration targets the reachable version only.
+A structured `prototype.json` (component tree, style diffs, interactions with live widget state — checkboxes, radios, select options, search/textarea values, open dialogs and off-canvas drawers — breakpoints, theme states, overlays, iframe subtrees), a `summary.md` for the agent to read first, a screenshot per screen, and — after restoration — a `diff-report.md` with a pixel-difference ratio, labelled hotspots and a style-mismatch list. AI-generated prototypes often keep several versions alive at once; capture reports that too: dormant and never-seen CSS selectors, hidden branches, duplicate ids and version-residue class names, so the restoration targets the reachable version only.
 
 ## How it works
 

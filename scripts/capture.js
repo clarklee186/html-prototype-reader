@@ -66,11 +66,32 @@ function inPageLib() {
   const clsOf = el => (typeof el.className === 'string' ? el.className.trim().split(/\s+/).filter(Boolean) : []);
   const semOf = el => {
     const s = {};
-    for (const a of ['role', 'aria-label', 'aria-hidden', 'alt', 'placeholder', 'name', 'type', 'value', 'href', 'title', 'for', 'action', 'contenteditable']) {
+    for (const a of ['role', 'aria-label', 'aria-hidden', 'aria-checked', 'aria-selected', 'aria-expanded', 'aria-pressed', 'aria-valuenow', 'aria-valuetext', 'aria-valuemin', 'aria-valuemax', 'aria-controls', 'alt', 'placeholder', 'name', 'type', 'href', 'title', 'for', 'action', 'contenteditable', 'list', 'accept', 'autocomplete', 'min', 'max', 'step', 'maxlength', 'pattern']) {
       const v = el.getAttribute && el.getAttribute(a); if (v != null && v !== '') s[a] = String(v).slice(0, 80);
     }
     if (el.disabled) s.disabled = true; if (el.required) s.required = true;
-    if (el.checked !== undefined && el.type === 'checkbox') s.checked = el.checked;
+    // 状态属性：JS 设值不更新 attribute，必须读 property（checked/indeterminate/value/selected/open/multiple）
+    try {
+      const t = el.tagName;
+      if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') {
+        if (typeof el.value === 'string' && el.value) s.value = el.value.replace(/\s+/g, ' ').slice(0, 120);
+      }
+      if (t === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
+        s.checked = !!el.checked;
+        if (el.indeterminate) s.indeterminate = true;
+      }
+      if (t === 'OPTION') { if (el.selected) s.selected = true; }
+      if (t === 'SELECT') {
+        if (el.multiple) s.multiple = true;
+        s.optionCount = el.options.length;
+        s.options = Array.from(el.options).slice(0, 30).map(o => ({ v: o.value, t: (o.textContent || '').trim().slice(0, 40), sel: !!o.selected }));
+      }
+      if (t === 'DIALOG' || t === 'DETAILS') s.open = !!el.open;
+      if (t === 'PROGRESS' || t === 'METER') { s.value = String(el.value); s.max = String(el.max); }
+    } catch (e) { /* 非常规元素 */ }
+    if (el.getAttribute && el.getAttribute('contenteditable') && el.textContent) {
+      s.editableText = el.textContent.replace(/\s+/g, ' ').trim().slice(0, 200);
+    }
     return s;
   };
   const pseudoOf = (el) => {
@@ -119,6 +140,16 @@ function inPageLib() {
     const cls = clsOf(el); if (cls.length) node.c = cls;
     const r = el.getBoundingClientRect();
     node.r = rounded(r); node.v = vis ? 1 : 0;
+    // 离视口标记（off-canvas 抽屉等）：可见但在文档流范围之外
+    if (vis) {
+      try {
+        const w = el.ownerDocument.defaultView;
+        const docEl = el.ownerDocument.documentElement;
+        const absX = r.x + (w ? w.scrollX : 0), absY = r.y + (w ? w.scrollY : 0);
+        const cw = docEl ? docEl.clientWidth : 0, pageH = docEl ? Math.max(docEl.scrollHeight, document.body ? 0 : 0) : 0;
+        if (absX >= cw || absX + r.width <= 0 || absY >= pageH || absY + r.height <= 0) node.offViewport = true;
+      } catch (e) { /* 跨文档异常容忍 */ }
+    }
     const map = styleMap(el);
     const sd = styleDiff(el, parentMap); if (sd) node.s = sd;
     const ps = pseudoOf(el); if (ps) node.ps = ps;
@@ -170,16 +201,22 @@ function inPageLib() {
 
   function interactiveList() {
     const list = [];
+    const vpW = document.documentElement ? document.documentElement.clientWidth : 0;
+    const pageH = document.documentElement ? Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0) : 0;
+    const scrollX = window.scrollX, scrollY = window.scrollY;
     for (const el of visibleEls(document.body)) {
       const t = el.tagName;
       const role = el.getAttribute('role');
-      const isInteractive = ['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'A', 'LABEL', 'SUMMARY'].includes(t)
-        || (role && /button|tab|menuitem|link|switch|checkbox|radio|combobox|option/.test(role));
+      const isInteractive = ['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'A', 'LABEL', 'SUMMARY', 'DIALOG', 'DETAILS', 'OPTION', 'PROGRESS', 'METER'].includes(t)
+        || (role && /button|tab|menuitem|link|switch|checkbox|radio|combobox|option|slider|searchbox|spinbutton/.test(role))
+        || el.isContentEditable;
       if (!isInteractive) continue;
       const st = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      const offViewport = (r.x + scrollX) >= vpW || (r.x + scrollX + r.width) <= 0 || (r.y + scrollY) >= pageH || (r.y + scrollY + r.height) <= 0;
       list.push({
         tag: t.toLowerCase(), cls: clsOf(el).slice(0, 3), text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60) || undefined,
-        sem: semOf(el), rect: rounded(el.getBoundingClientRect()), cursor: st.cursor, inOverlay: !!el.closest('[class*="modal"],[class*="dialog"],[class*="drawer"],[role="dialog"],dialog'),
+        sem: semOf(el), rect: rounded(r), cursor: st.cursor, inOverlay: !!el.closest('[class*="modal"],[class*="dialog"],[class*="drawer"],[role="dialog"],dialog'), offViewport: offViewport || undefined,
       });
     }
     return list;

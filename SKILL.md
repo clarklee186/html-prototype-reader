@@ -73,7 +73,7 @@ fileComposition            字节构成（标记/CSS/JS）与 token 估算 —�
   t=标签  id  c=class数组  r={x,y,w,h}  v=可见(1/0)  rep=N(重复兄弟折叠)
   s=样式diff(与父级 computed 对比后的非继承差异, 白名单属性)
   ps=伪元素[{pseudo,content,position,decorative,...}]   ← content:''+absolute 的装饰层也会被抓到
-  sem=语义(role/aria/alt/placeholder/type/disabled/required...)
+  sem=语义与状态(role/aria-*/alt/placeholder/name/type/href/disabled/required/checked/indeterminate/value/selected/open/multiple/options/editableText/list...)
   tx=叶子文本   ch=子节点   img/canvas/iframe=资源信息
 ```
 
@@ -109,5 +109,6 @@ fileComposition            字节构成（标记/CSS/JS）与 token 估算 —�
 - 2026-09-17 建立。四模块：extract（渲染+computed style 父级 diff+伪元素双条件）/ traverse（入口发现→逐个点击→签名去重→分屏截图）/ compress（rep 折叠+样式裁剪）/ output（prototype.json+summary.md）。
 - 2026-09-17 增加验收 diff 脚本（diff.js）：零 npm 依赖，像素比对在浏览器 canvas 内完成（需 --allow-file-access-from-files）；类样式按频次采样 250 类逐属性对比；变异实测（主色/圆角变量）能定位到具体类+属性+值。
 - 2026-09-17 **v1.0.1 修复**：① 同源 iframe 递归提取落地（深度上限 2，file:// 也生效）；② capture 截图前冻结动画/过渡，分屏截图可复现；③ 抽出 `shared.js` 作为 STYLE_PROPS / DIFF_PROPS / FREEZE_CSS / LAUNCH_ARGS / IFRAME_DEPTH_LIMIT 单一真理源（此前 capture 40+ 属性 vs diff 14 属性两份清单已漂移）；④ 去掉脚本内硬编码用户路径（改 os.homedir() 派生）；⑤ 清理死代码（无用句柄预取、无效 filter）、补 entriesFound/entriesClicked/iframe 统计进 summary；⑥ 热区标注改为取最小包含区间，不再被整页容器吃掉；⑦ 补 .gitignore / package.json（engines + npm scripts）。
+- 2026-09-17 **v1.0.5 组件状态覆盖补全**：覆盖矩阵 7/24 → 24/24（fixture：checkbox/radio/单选多选 select/搜索框/textarea/range/number/details/dialog 开与关/自定义 switch·slider/aria-pressed/contenteditable/datalist/离屏抽屉）。根因是 attribute vs property：JS 设值不更新 attribute（el.value/el.checked/el.selected/el.open 读 property）；补 aria-checked/aria-selected/aria-expanded/aria-pressed/aria-valuenow 等状态属性、select 的 options/selectedOptions/multiple、indeterminate、contenteditable 文本、dialog/details 的 open、progress/meter 的 value/max；interactiveList 增 DIALOG/DETAILS/OPTION/PROGRESS/METER/isContentEditable 与 offViewport 标记（off-canvas 抽屉，按文档流范围判断，避免把普通滚动内容误标）。
 - 2026-09-17 **v1.0.4 新增 dead-content 报告**：AI 生成原型常多版本内容共存（实测 1,424 条 CSS 规则中 1,030 条任一时刻休眠；605 button/285 input 藏在 JS 模板字符串）。capture 遍历后汇总各屏 token 并集，输出 pages[].deadContent：死 CSS 三分类（matchedNow / dormant=token 在其他屏出现过 / notSeenInCapture=捕获中从未出现，可能在未访问屏幕或主题态激活）、重复 id、版本残留类名（-old/-v2/-backup 模式）、隐藏分支（排除 head/script 等天然隐藏标签，父级可见才算分支根）。实现要点：token 并集与 attrsText 在 captureScreen 内收集（attrsText 上限 400KB）。
 - 关键坑（已修）：① 动态原型点击导航会整树重建 DOM，**句柄必须每轮重新查询**，预取会报 "Element is not attached"；② 伪元素必须按 content!=='none' 且记录 position，content:'' 的装饰层不能排除；③ 断点提取 parseFloat 去 'px'；④ **Playwright evaluate 传"字符串函数表达式 + 解构参数"会按表达式求值返回 undefined，必须传真实函数对象**（diff.js 的 COMPARE_FN）；⑤ 截图确定性：两侧共用同一份 FREEZE_CSS（用 transition-duration 0.001s 而非 transition:none，避免依赖 transitionend 的原型失去内容）。

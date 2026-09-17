@@ -34,7 +34,7 @@
 | `rep` | 被折叠进该节点的连续相同兄弟数 |
 | `s` | 相对父级的样式 diff（只保留非继承差异） |
 | `ps` | 伪元素：`content`、`position`、是否装饰层、关键视觉属性 |
-| `sem` | 语义属性：role、aria-*、alt、placeholder、type、disabled、required、href… |
+| `sem` | 语义属性与实时状态：role、aria-*（含 aria-checked/selected/expanded/pressed/valuenow）、alt、placeholder、name、type、href、disabled、required、`checked`/`indeterminate`（checkbox/radio，读 property）、`value`（input/textarea/select——读 property，JS 设值也能捕获）、`selected`/`options`/`multiple`/`optionCount`（select）、`open`（dialog/details）、`value`/`max`（progress/meter）、`list`（datalist）、`editableText`（contenteditable） |
 | `tx` | 叶子文本（仅可见元素，已裁剪空白） |
 | `ch` | 子节点 |
 | `img` / `canvas` / `iframe` | 资源信息；同源 iframe 的递归子树在 `iframe.content` |

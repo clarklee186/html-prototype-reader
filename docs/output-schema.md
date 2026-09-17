@@ -34,7 +34,7 @@ Component tree node fields:
 | `rep` | Number of consecutive identical siblings folded into this node |
 | `s` | Style diff against the parent (non-inherited differences only) |
 | `ps` | Pseudo-elements: `content`, `position`, decorative flag, key visual properties |
-| `sem` | Semantic attributes: role, aria-*, alt, placeholder, type, disabled, required, href… |
+| `sem` | Semantic attributes and live state: role, aria-* (incl. aria-checked/selected/expanded/pressed/valuenow), alt, placeholder, name, type, href, disabled, required, `checked`/`indeterminate` (checkbox/radio, read as property), `value` (input/textarea/select — property, so JS-set values are captured), `selected`/`options`/`multiple`/`optionCount` (select), `open` (dialog/details), `value`/`max` (progress/meter), `list` (datalist), `editableText` (contenteditable) |
 | `tx` | Leaf text (trimmed, visible elements only) |
 | `ch` | Children |
 | `img` / `canvas` / `iframe` | Resource info; `iframe.content` holds the recursed same-origin subtree |
