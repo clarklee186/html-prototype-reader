@@ -31,7 +31,7 @@ Agent 直接读 HTML 源码（"裸读"）存在系统性遗漏：
 | **compress** 上下文压缩 | 重复兄弟子树按结构签名折叠（`rep: N` 标记）、样式继承 diff、px 取整 |
 | **output** 结构化产物 | `prototype.json` + `summary.md` + 分屏截图 |
 
-覆盖的细节维度：伪元素（`::before/::after`，含 `content:''` + 绝对定位的装饰图层）、交互元素清单（button/input/select/textarea/[role]，含 disabled / required / placeholder / 所属覆盖层）、资源引用（img/srcset/background-image/@font-face、死引用检测）、**响应式断点清单**（从 CSSOM 提取全部 `@media` 条件并去重）、**主题态探针**（检测主题切换按钮，记录切换前后关键元素生效色）、弹窗 / 抽屉 / Toast 清单（隐藏的也抓取子树结构）、同源 iframe 递归、Canvas 尺寸记录、懒加载兜底（IntersectionObserver stub + `loading=eager` + 全页滚动）。
+覆盖的细节维度：伪元素（`::before/::after`，含 `content:''` + 绝对定位的装饰图层）、交互元素清单（button/input/select/textarea/[role]，含 disabled / required / placeholder / 所属覆盖层）、资源引用（img/srcset/background-image/@font-face、死引用检测）、**响应式断点清单**（从 CSSOM 提取全部 `@media` 条件并去重）、**主题态探针**（检测主题切换按钮，记录切换前后关键元素生效色）、弹窗 / 抽屉 / Toast 清单（隐藏的也抓取子树结构）、同源 iframe 递归（深度 ≤ 2，跨域只记 `src`）、Canvas 尺寸记录、懒加载兜底（IntersectionObserver stub + `loading=eager` + 全页滚动）、**每次截图前冻结动画**（保证分屏基准多次运行可复现）。
 
 ### diff.js — 还原验收
 
@@ -68,10 +68,15 @@ git clone https://github.com/clarklee186/html-prototype-reader.git
 然后安装唯一的运行时依赖：
 
 ```bash
-# 任选一个 node_modules 位置；脚本会按以下顺序自动解析：
+# 最简（使用仓库自带 package.json，playwright-core 为可选 peer 依赖）
+npm i
+
+# 或显式安装到任意 node_modules 位置；脚本会按以下顺序自动解析：
 # ① 当前 NODE_PATH ② ~/.workbuddy/binaries/node/workspace/node_modules ③ 脚本同级 node_modules
 npm i playwright-core
 ```
+
+仓库自带 `package.json`（声明 `engines.node >= 18` 与两个快捷入口：`npm run capture -- <参数>`、`npm run diff -- <参数>`）。
 
 ## 使用方法
 
@@ -141,7 +146,7 @@ node scripts/diff.js "C:/proto/dashboard.html" "http://localhost:5173" "C:/out/a
 ## 已知边界
 
 - 深层交互（弹窗内部内容、tab 嵌套、行内展开态）需触发后才可见，未触发的拿不到；必要时对具体入口手动触发再跑一次 capture
-- Canvas 只记录尺寸与位置，位图内容不提取；跨域 iframe 只记录 src
+- Canvas 只记录尺寸与位置，位图内容不提取；同源 iframe 递归深度上限 2，跨域 iframe 只记录 `src`
 - 屏幕去重按「可见元素 + 类签名」哈希，极相似屏幕可能被合并（受 `--max-screens` 保护）
 
 ## 实测基线（回归参考）

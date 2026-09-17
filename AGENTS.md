@@ -15,18 +15,21 @@ Repo layout:
 
 ```
 SKILL.md          # agent-facing skill doc (trigger conditions, usage, output schema, boundaries, maintenance log)
-_meta.json        # registry metadata — description MUST stay byte-identical to SKILL.md frontmatter description
+_meta.json        # registry metadata — description MUST stay byte-identical to SKILL.md frontmatter description; version is semver
+package.json      # version must match _meta.json; declares engines.node >= 18 and capture/diff shortcuts
 LICENSE           # MIT
-scripts/capture.js
-scripts/diff.js
-README.md         # English; README.zh-CN.md is the Chinese counterpart (keep both in sync)
+scripts/shared.js     # single source of truth: STYLE_PROPS, ALWAYS_KEEP, DIFF_PROPS, FREEZE_CSS, LAUNCH_ARGS, IFRAME_DEPTH_LIMIT
+scripts/capture.js    # render + traverse + compress + output
+scripts/diff.js       # acceptance diff (pixel + structural)
+README.md / README.zh-CN.md   # English / Chinese, kept in structural parity (9 sections, same code blocks and tables)
+AGENTS.md / CLAUDE.md         # this file and its importer
 ```
 
 ## Environment
 
-- Node ≥ 18 (developed on 22.x). No npm runtime dependencies except `playwright-core` (≥ 1.40, developed on 1.62.1).
-- Scripts resolve `playwright-core` in this order: current `NODE_PATH` → `~/.workbuddy/binaries/node/workspace/node_modules` → sibling `node_modules`. Do not commit `node_modules` or add it to the package.
-- Browser: local Chrome → Edge → bundled Chromium (last resort). `diff.js` launches with `--allow-file-access-from-files` (required for canvas reads of `file://` images) — keep that flag.
+- Node ≥ 18 (developed on 22.x). The only runtime dependency is `playwright-core` (≥ 1.40, developed on 1.62.1), declared as an optional peer dependency in `package.json`.
+- Scripts resolve `playwright-core` in this order: current `NODE_PATH` → `~/.workbuddy/binaries/node/workspace/node_modules` (derived from `os.homedir()`) → `../node_modules` → `node_modules` under cwd. Never hardcode a user-specific absolute path here; never commit `node_modules`.
+- Browser: local Chrome → Edge → bundled Chromium (last resort). Both scripts launch with `LAUNCH_ARGS` (`--allow-file-access-from-files`) — required for canvas reads of `file://` images (diff) **and** for same-origin iframe recursion (capture).
 - No test suite exists. Regression is a documented baseline (see "Regression" below).
 
 ## Hard-won invariants (break these and things fail silently)
@@ -37,10 +40,10 @@ These were learned by debugging; each is load-bearing. If you touch the relevant
 2. **Pseudo-element filter must not exclude empty content.** Decorative layers are `content:''` + `position:absolute`. Filter on `content !== 'none'/'normal'` and record `position`; do not filter on content being non-empty.
 3. **Strip `px` before numeric breakpoint parsing** (`parseFloat`), otherwise the breakpoint list is all `NaN`.
 4. **Playwright `evaluate` with a *string* that looks like a function is evaluated as an expression.** An arrow function with a destructured object parameter serializes to `undefined`. `diff.js`'s `COMPARE_FN` must stay a real function object passed directly. If you add injected constants, follow `capture.js`'s `%PLACEHOLDER%`-string replacement pattern instead (placeholders must live inside string literals so the file still parses).
-5. **Screenshot determinism requires freezing.** Both sides of a diff get `FREEZE_CSS` (animation paused + transition none + caret transparent) and the anti-lazy-loading stub. Removing either reintroduces motion noise between the two screenshots.
-6. **`capture.js` injects `inPageLib` via `Function.prototype.toString`** with `%STYLE_PROPS_JSON%` / `%ALWAYS_KEEP_JSON%` replaced at runtime. `STYLE_PROPS` (top of file) is the single source of truth for extracted computed-style properties — editing the in-page list alone does nothing.
+5. **Screenshot determinism requires the shared freeze, on both sides.** `FREEZE_CSS` from `shared.js` is injected into both the prototype and the restoration before screenshots, and into capture before screen traversal. It uses `transition-duration: 0.001s` rather than `transition:none` on purpose: still deterministic, but `transitionend` still fires, so prototypes that reveal content on `transitionend` keep working.
+6. **`capture.js` injects `inPageLib` via `Function.prototype.toString`** with `%STYLE_PROPS_JSON%` / `%ALWAYS_KEEP_JSON%` / `%IFRAME_DEPTH%` replaced at runtime; `diff.js` does the same with `%DIFF_PROPS%` inside `SNAPSHOT_FN`. Placeholders must live inside string literals so the file still parses. **Style-property lists live only in `shared.js`**: `STYLE_PROPS` is the full capture list, `DIFF_PROPS` is the deliberately smaller high-signal subset used for acceptance (it excludes `transform` / `transition` / `opacity`, which legitimately differ between implementations and would drown real mismatches in noise). Editing an in-page list instead of `shared.js` does nothing.
 7. **Output paths must be absolute** in `diff.js` (`OUT = path.resolve(outDir)`); relative output dirs break the `file://` image URLs passed to the compare page.
-8. **`_meta.json` description must be byte-identical to the SKILL.md frontmatter description.** Registries reject mismatches. Version is semver; bump on every published change.
+8. **`_meta.json` description must be byte-identical to the SKILL.md frontmatter description, and `version` must match both `package.json` and the semver you publish with.** Registries reject mismatches. Bump on every published change.
 
 ## Regression baseline
 
@@ -57,7 +60,7 @@ After any behavior change: re-run capture on the reference prototype and confirm
 ## Conventions
 
 - Commits: conventional commits (`feat:`, `fix:` …), no backticks in messages. Default branch `main`, LF line endings enforced by `.gitattributes`.
-- Version bumps: update `version` in `_meta.json`; if the description changed, update it in **both** `_meta.json` and the `SKILL.md` frontmatter, word for word.
+- Version bumps: update `version` in **both** `_meta.json` and `package.json`; if the description changed, update it in **both** `_meta.json` and the `SKILL.md` frontmatter, word for word.
 - Document every non-obvious fix in the `SKILL.md` "维护记录" (maintenance log) section — that log is how future agents avoid rediscovering the pitfalls above.
-- User-facing docs (`README.md` / `README.zh-CN.md`) are maintained in parallel; content parity is required, language differs.
+- User-facing docs (`README.md` / `README.zh-CN.md`) are maintained in parallel; structural parity is required (same section count, same code blocks and tables), language differs.
 - Do not add npm runtime dependencies. The zero-dependency design (in-browser canvas pixel comparison) is intentional.

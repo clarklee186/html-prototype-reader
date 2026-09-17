@@ -14,16 +14,18 @@
  */
 'use strict';
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 function loadPlaywright() {
   try { return require('playwright-core'); } catch (e) { /* continue */ }
   const candidates = [
-    'C:/Users/admin/.workbuddy/binaries/node/workspace/node_modules/playwright-core',
-    path.join(process.env.USERPROFILE || '', '.workbuddy/binaries/node/workspace/node_modules/playwright-core'),
+    path.join(os.homedir(), '.workbuddy', 'binaries', 'node', 'workspace', 'node_modules', 'playwright-core'),
+    path.join(__dirname, '..', 'node_modules', 'playwright-core'),
+    path.join(process.cwd(), 'node_modules', 'playwright-core'),
   ];
   for (const c of candidates) { try { return require(c); } catch (e) { /* next */ } }
-  console.error('[html-prototype-reader] 找不到 playwright-core');
+  console.error('[html-prototype-reader] 找不到 playwright-core。请安装任一处：npm i playwright-core（或设 NODE_PATH 指向已安装目录）');
   process.exit(2);
 }
 const { chromium } = loadPlaywright();
@@ -41,8 +43,8 @@ const OUT = path.resolve(outDir); // 后续全部用绝对路径，避免相对�
 const toUrl = p => /^https?:\/\//.test(p) ? p : 'file:///' + path.resolve(p).replace(/\\/g, '/');
 const PROTO_URL = toUrl(protoArg), REST_URL = toUrl(restArg);
 
-/* 冻结动画/过渡，保证两次截图确定性 */
-const FREEZE_CSS = `*,*::before,*::after{animation-play-state:paused !important;animation-delay:-9999s !important;transition:none !important;caret-color:transparent !important}`;
+/* 冻结动画/过渡与启动参数：与 capture.js 共用共享模块，避免两侧基准漂移 */
+const { FREEZE_CSS, DIFF_PROPS, LAUNCH_ARGS } = require('./shared');
 
 /* 页内快照：结构 + 类样式样本 + 文本 + 交互元素 + 分区 */
 const SNAPSHOT_FN = `(() => {
@@ -61,7 +63,7 @@ const SNAPSHOT_FN = `(() => {
     }
   }
   // 类样式样本（按出现频次取前 250 类，各自首个可见匹配）
-  const PROPS = ['display','backgroundColor','color','fontSize','fontWeight','lineHeight','padding','margin','borderRadius','boxShadow','flexDirection','gap','border','textAlign'];
+  const PROPS = JSON.parse('%DIFF_PROPS%');
   const topCls = Object.entries(classCount).sort((a, b) => b[1] - a[1]).slice(0, 250).map(e => e[0]);
   const classStyles = {};
   for (const c of topCls) {
@@ -132,7 +134,7 @@ async function COMPARE_FN({ aUrl, bUrl, T, BLOCK }) {
   let browser = null, channelUsed = null;
   for (const channel of ['chrome', 'msedge', undefined]) {
     try {
-      browser = await chromium.launch(channel ? { channel, headless: true, args: ['--allow-file-access-from-files'] } : { headless: true, args: ['--allow-file-access-from-files'] });
+      browser = await chromium.launch(channel ? { channel, headless: true, args: LAUNCH_ARGS } : { headless: true, args: LAUNCH_ARGS });
       channelUsed = channel || 'bundled-chromium'; break;
     } catch (e) { /* next */ }
   }
@@ -149,7 +151,7 @@ async function COMPARE_FN({ aUrl, bUrl, T, BLOCK }) {
     await page.evaluate(() => { const RealIO = window.IntersectionObserver; if (RealIO) window.IntersectionObserver = class extends RealIO { constructor(cb, o) { super(cb, o); setTimeout(() => { try { cb([{ isIntersecting: true, target: document.body }], this); } catch (e) {} }, 0); } }; document.querySelectorAll('img[loading="lazy"]').forEach(i => { i.loading = 'eager'; }); }).catch(() => {});
     await page.evaluate(async () => { await new Promise(res => { let y = 0; const t = setInterval(() => { y += 800; window.scrollTo(0, y); if (y >= (document.body ? document.body.scrollHeight : 0)) { clearInterval(t); window.scrollTo(0, 0); res(); } }, 35); }); }).catch(() => {});
     await page.waitForTimeout(400);
-    const snapshot = await page.evaluate(SNAPSHOT_FN).catch(e => ({ error: String(e).slice(0, 120) }));
+    const snapshot = await page.evaluate(SNAPSHOT_FN.replace('%DIFF_PROPS%', JSON.stringify(DIFF_PROPS))).catch(e => ({ error: String(e).slice(0, 120) }));
     await page.screenshot({ path: shotPath, fullPage: true });
     await page.close();
     return snapshot;
@@ -195,12 +197,18 @@ async function COMPARE_FN({ aUrl, bUrl, T, BLOCK }) {
   const missingInter = [...interA].filter(x => !interB.has(x));
   const extraInter = [...interB].filter(x => !interA.has(x));
 
-  // 热区 → 原型分区标注
-  const sections = (snapA.sections || []).filter(s => !s.heading || true);
+  // 热区 → 原型分区标注：优先取 y 之上最近的一个标题（文档大纲），否则回落到包含 y 的最小容器
+  const sections = (snapA.sections || []).filter(s => Number.isFinite(s.y0));
+  const headings = sections.filter(s => s.heading).sort((a, b) => a.y0 - b.y0);
+  const containers = sections.filter(s => !s.heading);
   const labelAt = y => {
-    let best = null;
-    for (const s of sections) { if (y >= s.y0 && y < (s.y1 || s.y0 + 99999)) { best = s.label; break; } }
-    if (!best) { let dist = Infinity; for (const s of sections) { const d = Math.abs(y - s.y0); if (d < dist) { dist = d; best = s.label; } } }
+    let outline = null;
+    for (const h of headings) { if (h.y0 <= y) outline = h.label; else break; }
+    if (outline) return outline;
+    const containing = containers.filter(s => y >= s.y0 && y < (s.y1 || s.y0 + 99999));
+    if (containing.length) return containing.reduce((a, b) => ((b.y1 - b.y0) < (a.y1 - a.y0) ? b : a)).label;
+    let best = null, dist = Infinity;
+    for (const s of containers) { const d = Math.abs(y - s.y0); if (d < dist) { dist = d; best = s.label; } }
     return best || '?';
   };
   const hotspots = (cmp.blocks || []).map(b => ({ yCenter: b.by * BLOCK + BLOCK / 2, xCenter: b.bx * BLOCK + BLOCK / 2, ...b, section: labelAt(b.by * BLOCK + BLOCK / 2) }))

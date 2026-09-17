@@ -10,17 +10,20 @@
  */
 'use strict';
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { STYLE_PROPS, ALWAYS_KEEP: ALWAYS_KEEP_ARR, FREEZE_CSS, LAUNCH_ARGS, IFRAME_DEPTH_LIMIT } = require('./shared');
 
-/* ---------- playwright-core 解析（NODE_PATH 或托管工作区兜底） ---------- */
+/* ---------- playwright-core 解析（NODE_PATH → 用户级托管工作区 → 同级 node_modules） ---------- */
 function loadPlaywright() {
   try { return require('playwright-core'); } catch (e) { /* continue */ }
   const candidates = [
-    'C:/Users/admin/.workbuddy/binaries/node/workspace/node_modules/playwright-core',
-    path.join(process.env.USERPROFILE || '', '.workbuddy/binaries/node/workspace/node_modules/playwright-core'),
+    path.join(os.homedir(), '.workbuddy', 'binaries', 'node', 'workspace', 'node_modules', 'playwright-core'),
+    path.join(__dirname, '..', 'node_modules', 'playwright-core'),
+    path.join(process.cwd(), 'node_modules', 'playwright-core'),
   ];
   for (const c of candidates) { try { return require(c); } catch (e) { /* next */ } }
-  console.error('[html-prototype-reader] 找不到 playwright-core，请先安装到托管 node 工作区');
+  console.error('[html-prototype-reader] 找不到 playwright-core。请安装任一处：npm i playwright-core（或设 NODE_PATH 指向已安装目录）');
   process.exit(2);
 }
 const { chromium } = loadPlaywright();
@@ -45,23 +48,14 @@ if (fs.statSync(absInput).isDirectory()) {
 } else inputs.push(absInput);
 if (!inputs.length) { console.error('未找到 HTML 文件'); process.exit(1); }
 
-/* ---------- 常量 ---------- */
-const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'LINK', 'META', 'HEAD', 'BR']);
-const STYLE_PROPS = [
-  'display', 'position', 'top', 'right', 'bottom', 'left', 'zIndex', 'opacity', 'overflow',
-  'flexDirection', 'justifyContent', 'alignItems', 'flexWrap', 'gap',
-  'gridTemplateColumns', 'gridTemplateRows', 'gridColumn', 'gridRow', 'gridAutoFlow',
-  'padding', 'margin', 'borderRadius', 'border', 'borderTop', 'borderRight', 'borderBottom', 'borderLeft',
-  'backgroundColor', 'backgroundImage', 'color', 'fontFamily', 'fontSize', 'fontWeight', 'lineHeight',
-  'textAlign', 'letterSpacing', 'textTransform', 'textDecorationLine', 'textOverflow', 'whiteSpace',
-  'boxShadow', 'transform', 'transition', 'cursor', 'visibility', 'aspectRatio', 'objectFit', 'minWidth', 'maxWidth',
-];
-const ALWAYS_KEEP = new Set(['display', 'position', 'flexDirection', 'justifyContent', 'alignItems', 'gridTemplateColumns', 'visibility', 'overflow']);
+/* ---------- 常量（STYLE_PROPS / FREEZE_CSS 等见 shared.js，单一真理源） ---------- */
+const ALWAYS_KEEP = new Set(ALWAYS_KEEP_ARR);
 
 /* ---------- 页内工具（注入浏览器执行） ---------- */
 function inPageLib() {
   const STYLE_PROPS = JSON.parse('%STYLE_PROPS_JSON%');
   const ALWAYS_KEEP = new Set(JSON.parse('%ALWAYS_KEEP_JSON%'));
+  const IFRAME_DEPTH_LIMIT = parseInt('%IFRAME_DEPTH%', 10);
   const SKIP = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'LINK', 'META', 'HEAD', 'BR']);
 
   const rounded = r => ({ x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) });
@@ -132,7 +126,19 @@ function inPageLib() {
     const tx = vis ? textOf(el) : undefined; if (tx) node.tx = tx;
     if (el.tagName === 'CANVAS') { node.canvas = { w: el.width, h: el.height }; }
     if (el.tagName === 'IMG') { node.img = { src: (el.getAttribute('src') || '').slice(0, 160), broken: el.complete && el.naturalWidth === 0 }; const ss = el.getAttribute('srcset'); if (ss) node.img.srcset = ss.slice(0, 160); }
-    if (el.tagName === 'IFRAME') { node.iframe = { src: (el.src || '').slice(0, 160) }; }
+    if (el.tagName === 'IFRAME') {
+      node.iframe = { src: (el.src || '').slice(0, 160) };
+      // 同源 iframe：递归提取内容（受 IFRAME_DEPTH_LIMIT 限制；跨域访问会抛异常，此时只保留 src）
+      if (depth < IFRAME_DEPTH_LIMIT) {
+        try {
+          const doc = el.contentDocument;
+          if (doc && doc.body) {
+            node.iframe.sameOrigin = true;
+            node.iframe.content = buildTree(doc.body, null, depth + 1);
+          } else { node.iframe.sameOrigin = false; }
+        } catch (e) { node.iframe.sameOrigin = false; node.iframe.blocked = true; }
+      } else { node.iframe.depthSkipped = true; }
+    }
     if (depth < 24 && el.children.length) {
       const kids = [];
       const sigs = [];
@@ -222,7 +228,7 @@ function inPageLib() {
       out.push({
         cls: clsOf(el).join('.'), id: el.id || undefined, hiddenNow: !(r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden'),
         role: el.getAttribute('role') || undefined,
-        tree: buildTree(el, styleMap(el.parentElement), 0),
+        tree: buildTree(el, el.parentElement ? styleMap(el.parentElement) : null, 0),
       });
     }
     return out;
@@ -237,7 +243,7 @@ function inPageLib() {
   // 启动浏览器：chrome → msedge → 默认
   let browser = null, channelUsed = null;
   for (const channel of ['chrome', 'msedge', undefined]) {
-    try { browser = await chromium.launch(channel ? { channel, headless: true } : { headless: true }); channelUsed = channel || 'bundled-chromium'; break; } catch (e) { /* next */ }
+    try { browser = await chromium.launch(channel ? { channel, headless: true, args: LAUNCH_ARGS } : { headless: true, args: LAUNCH_ARGS }); channelUsed = channel || 'bundled-chromium'; break; } catch (e) { /* next */ }
   }
   if (!browser) { console.error('无法启动浏览器（chrome/msedge 均失败）'); process.exit(3); }
 
@@ -253,6 +259,9 @@ function inPageLib() {
     try { await page.goto(fileUrl, { waitUntil: 'load', timeout: PAGE_TIMEOUT }); } catch (e) { pages.push({ file: path.basename(file), error: 'goto: ' + String(e).slice(0, 120) }); await page.close(); continue; }
     try { await page.waitForLoadState('networkidle', { timeout: 6000 }); } catch (e) { /* 网络长连接容错 */ }
 
+    // 冻结动画/过渡：保证分屏截图可复现（与 diff.js 用同一份 FREEZE_CSS，否则两侧基准会漂移）
+    await page.addStyleTag({ content: FREEZE_CSS }).catch(() => {});
+
     // 反懒加载 + 全页滚动
     await page.evaluate(() => {
       const RealIO = window.IntersectionObserver;
@@ -266,7 +275,10 @@ function inPageLib() {
     }).catch(() => {});
     await page.waitForTimeout(400);
 
-    const libSrc = '(' + inPageLib.toString().replace('%STYLE_PROPS_JSON%', JSON.stringify(STYLE_PROPS)).replace('%ALWAYS_KEEP_JSON%', JSON.stringify([...ALWAYS_KEEP])) + ')()';
+    const libSrc = '(' + inPageLib.toString()
+      .replace('%STYLE_PROPS_JSON%', JSON.stringify(STYLE_PROPS))
+      .replace('%ALWAYS_KEEP_JSON%', JSON.stringify([...ALWAYS_KEEP]))
+      .replace('%IFRAME_DEPTH%', String(IFRAME_DEPTH_LIMIT)) + ')()';
 
     // CSS 统计 + 覆盖层清单 + 初始树
     const css = await page.evaluate(libSrc + '.cssStats()').catch(e => ({ error: String(e).slice(0, 100) }));
@@ -325,8 +337,8 @@ function inPageLib() {
     const entryTexts = await page.evaluate(`(() => {
       return Array.from(document.querySelectorAll('${ENTRY_SEL}')).map(el => (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 24));
     })()`).catch(() => []);
-    const entryHandles = await page.$$(ENTRY_SEL);
-    let clicked = 0;
+    const entriesFound = entryTexts.length;
+    let entriesClicked = 0;
     for (let i = 0; i < entryTexts.length; i++) {
       if (screens.length >= MAX_SCREENS) break;
       // 关键：每次点击前重新查询句柄 —— 导航点击常导致整棵 DOM 重建，预取句柄会失效
@@ -337,7 +349,7 @@ function inPageLib() {
       }
       if (!handle) continue;
       try { await handle.click({ timeout: 2000 }); } catch (err) { if (process.env.DEBUG) console.error('[entry-click-fail]', i, String(err).slice(0, 80)); continue; }
-      clicked++;
+      entriesClicked++;
       await page.waitForTimeout(320);
       const sc = await captureScreen(entryTexts[i] || ('entry-' + i), entryTexts[i]);
       if (process.env.DEBUG) console.error('[entry]', i, JSON.stringify(entryTexts[i]), '->', sc ? (sc.dup ? 'DUP' : 'PUSH ' + sc.elementCount + ' ' + (sc.heading || '')) : 'NULL');
@@ -353,9 +365,20 @@ function inPageLib() {
       stylesheets: document.styleSheets.length,
     })).catch(() => ({}));
 
+    // iframe 递归结果汇总（同源已递归，跨域只留 src）
+    const iframeStats = { total: 0, sameOriginRecursed: 0, crossOriginOrBlocked: 0 };
+    const walkIframes = n => {
+      if (!n) return;
+      if (n.iframe) { iframeStats.total++; if (n.iframe.sameOrigin) iframeStats.sameOriginRecursed++; else iframeStats.crossOriginOrBlocked++; }
+      (n.ch || []).forEach(walkIframes);
+      if (n.iframe && n.iframe.content) walkIframes(n.iframe.content);
+    };
+    screens.forEach(s => walkIframes(s.tree));
+
     pages.push({
       file: path.basename(file), ...meta, channel: channelUsed,
       screens, overlays, css, theme,
+      entriesFound, entriesClicked, iframes: iframeStats,
       themeToggled: !!theme.toggleFound,
     });
     await page.close();
@@ -395,7 +418,9 @@ function inPageLib() {
     L.push(`## ${p.file} — ${p.title || ''}`);
     if (p.error) { L.push(`- ⚠️ 加载失败：${p.error}`); continue; }
     L.push(`- 屏幕：${p.screens.length} 个（${p.screens.map(s => `${s.name || s.heading || '?'}(${s.elementCount}元素)`).join('、')}）`);
+    L.push(`- 交互遍历：发现入口 ${p.entriesFound ?? '-'} 个，成功点击 ${p.entriesClicked ?? '-'} 次，去重后得 ${p.screens.length} 屏${p.entriesFound > p.screens.length ? '（差额为签名重复或点击失败）' : ''}`);
     L.push(`- 覆盖层（弹窗/抽屉/Toast）：${(p.overlays || []).length} 个${(p.overlays || []).filter(o => o.hiddenNow).length ? `，其中 ${(p.overlays || []).filter(o => o.hiddenNow).length} 个当前隐藏（结构已在 prototype.json 中，触发后可见）` : ''}`);
+    if (p.iframes && p.iframes.total) L.push(`- iframe：${p.iframes.total} 个，其中同源已递归 ${p.iframes.sameOriginRecursed} 个、跨域或不可访问 ${p.iframes.crossOriginOrBlocked} 个（只记 src）`);
     if (p.css && p.css.breakpoints) L.push(`- 响应式断点：${p.css.breakpoints.join(' / ')}px（@media 块 ${p.css.mediaConditions.length} 个）`);
     if (p.css) L.push(`- CSS 交互态：:hover ${p.css.hover} 条、:focus ${p.css.focus} 条、伪元素规则 ${p.css.pseudoRules} 条、@keyframes ${p.css.keyframes} 组；自定义属性定义 ${Object.keys(p.css.customPropsByState || {}).length} 处`);
     if (p.theme && p.theme.toggleFound) L.push(`- 主题切换：检测到，切换前后探针见 prototype.json（还原时两种状态都要覆盖）`);

@@ -31,7 +31,7 @@ This tool renders in a real browser and extracts facts, turning guesses into rea
 | **compress** | Repeated sibling subtrees folded by structural signature (`rep: N`), style inheritance diff, px rounding |
 | **output** | `prototype.json` + `summary.md` + per-screen screenshots |
 
-Detail dimensions covered: pseudo-elements (`::before/::after`, including `content:''` + absolutely-positioned decorative layers), interactive-element inventory (button/input/select/textarea/[role] with disabled / required / placeholder / overlay membership), resource references (img/srcset/background-image/@font-face, broken-reference detection), **responsive breakpoint inventory** (all `@media` conditions deduplicated from the CSSOM), **theme-state probe** (detects theme toggles, records effective colors of key elements before/after), modal / drawer / toast inventory (hidden ones included with subtree structure), same-origin iframe recursion, canvas size recording, lazy-loading fallback (IntersectionObserver stub + `loading=eager` + full-page scroll).
+Detail dimensions covered: pseudo-elements (`::before/::after`, including `content:''` + absolutely-positioned decorative layers), interactive-element inventory (button/input/select/textarea/[role] with disabled / required / placeholder / overlay membership), resource references (img/srcset/background-image/@font-face, broken-reference detection), **responsive breakpoint inventory** (all `@media` conditions deduplicated from the CSSOM), **theme-state probe** (detects theme toggles, records effective colors of key elements before/after), modal / drawer / toast inventory (hidden ones included with subtree structure), same-origin iframe recursion (depth ≤ 2; cross-origin frames record `src` only), canvas size recording, lazy-loading fallback (IntersectionObserver stub + `loading=eager` + full-page scroll), and **frozen animations before every screenshot** (so per-screen baselines are reproducible across runs).
 
 ### diff.js — restoration acceptance
 
@@ -68,10 +68,15 @@ git clone https://github.com/clarklee186/html-prototype-reader.git
 Then install the single runtime dependency:
 
 ```bash
-# Any node_modules location works; scripts resolve in this order:
+# Simplest (uses the repo's package.json, where playwright-core is an optional peer dependency)
+npm i
+
+# Or install it explicitly into any node_modules location; scripts resolve in this order:
 # ① current NODE_PATH ② ~/.workbuddy/binaries/node/workspace/node_modules ③ sibling node_modules
 npm i playwright-core
 ```
+
+The repo ships a `package.json` declaring `engines.node >= 18` and two shortcuts: `npm run capture -- <args>` and `npm run diff -- <args>`.
 
 ## Usage
 
@@ -141,7 +146,7 @@ Once installed into an agent's skill directory, it triggers automatically when t
 ## Known limitations
 
 - Deep interactions (modal contents, nested tabs, inline expansion states) are only visible after being triggered and cannot be captured otherwise; trigger specific entries manually and re-run capture when needed
-- Canvas: only size and position are recorded, bitmap content is not extracted; cross-origin iframes record src only
+- Canvas: only size and position are recorded, bitmap content is not extracted; same-origin iframes are recursed to depth 2, cross-origin iframes record `src` only
 - Screen deduplication uses a "visible elements + class signature" hash; near-identical screens may merge (bounded by `--max-screens`)
 
 ## Regression baseline

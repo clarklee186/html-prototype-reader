@@ -100,11 +100,13 @@ fileComposition            字节构成（标记/CSS/JS）与 token 估算 —�
 
 - 深层交互（弹窗内部内容、tab 嵌 tab、行内展开态）只在被触发后可见；overlay 结构若未在初始 DOM 中则拿不到。必要时对具体入口手动触发再跑一次 capture。
 - Canvas 只记录尺寸与节点位置，位图内容需另行导出。
-- 跨域 iframe 只记录 src；同源 iframe 内容不会被递归（原型场景少见，需要时手动处理）。
+- iframe：同源内容会递归提取（深度上限 2，`iframe.sameOrigin=true` + `iframe.content` 子树）；跨域或不可访问时只记录 `src`（`blocked=true`）。递归依赖启动参数 `--allow-file-access-from-files`（已内置），file:// 原型同样生效。
 - 屏幕去重按"可见元素+类签名"哈希，极相似的屏可能被合并；MAX_SCREENS 上限默认 30。
+- 截图前会注入冻结动画样式（animation paused + transition 0.001s），保证同一原型多次运行的分屏截图可复现；依赖 transitionend 显示内容的原型不受影响（过渡仍会触发，只是时长趋零）。
 
 ## 维护记录
 
 - 2026-09-17 建立。四模块：extract（渲染+computed style 父级 diff+伪元素双条件）/ traverse（入口发现→逐个点击→签名去重→分屏截图）/ compress（rep 折叠+样式裁剪）/ output（prototype.json+summary.md）。
 - 2026-09-17 增加验收 diff 脚本（diff.js）：零 npm 依赖，像素比对在浏览器 canvas 内完成（需 --allow-file-access-from-files）；类样式按频次采样 250 类逐属性对比；变异实测（主色/圆角变量）能定位到具体类+属性+值。
-- 关键坑（已修）：① 动态原型点击导航会整树重建 DOM，**句柄必须每轮重新查询**，预取会报 "Element is not attached"；② 伪元素必须按 content!=='none' 且记录 position，content:'' 的装饰层不能排除；③ 断点提取 parseFloat 去 'px'；④ **Playwright evaluate 传"字符串函数表达式 + 解构参数"会按表达式求值返回 undefined，必须传真实函数对象**（diff.js 的 COMPARE_FN）；⑤ 截图确定性：注入冻结动画 CSS（animation paused + transition none）+ 反懒加载 stub，否则两次截图会有动效噪声。
+- 2026-09-17 **v1.0.1 修复**：① 同源 iframe 递归提取落地（深度上限 2，file:// 也生效）；② capture 截图前冻结动画/过渡，分屏截图可复现；③ 抽出 `shared.js` 作为 STYLE_PROPS / DIFF_PROPS / FREEZE_CSS / LAUNCH_ARGS / IFRAME_DEPTH_LIMIT 单一真理源（此前 capture 40+ 属性 vs diff 14 属性两份清单已漂移）；④ 去掉脚本内硬编码用户路径（改 os.homedir() 派生）；⑤ 清理死代码（无用句柄预取、无效 filter）、补 entriesFound/entriesClicked/iframe 统计进 summary；⑥ 热区标注改为取最小包含区间，不再被整页容器吃掉；⑦ 补 .gitignore / package.json（engines + npm scripts）。
+- 关键坑（已修）：① 动态原型点击导航会整树重建 DOM，**句柄必须每轮重新查询**，预取会报 "Element is not attached"；② 伪元素必须按 content!=='none' 且记录 position，content:'' 的装饰层不能排除；③ 断点提取 parseFloat 去 'px'；④ **Playwright evaluate 传"字符串函数表达式 + 解构参数"会按表达式求值返回 undefined，必须传真实函数对象**（diff.js 的 COMPARE_FN）；⑤ 截图确定性：两侧共用同一份 FREEZE_CSS（用 transition-duration 0.001s 而非 transition:none，避免依赖 transitionend 的原型失去内容）。
