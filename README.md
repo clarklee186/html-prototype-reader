@@ -1,158 +1,85 @@
+<div align="center">
+
 # html-prototype-reader
 
-English | [简体中文](README.zh-CN.md)
+**Rendered facts for HTML prototypes — read, restore, verify**
+
+<img src="assets/banner.webp" alt="html-prototype-reader — rendered facts for HTML prototypes" width="100%">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Node](https://img.shields.io/badge/node-%E2%89%A518-blue)
-![Runtime](https://img.shields.io/badge/runtime-playwright--core%20%2B%20Chrome%2FEdge-orange)
 
-A **render-based HTML prototype reader and acceptance-diff toolkit for AI agents**. It turns HTML prototypes exported from design tools (single-page, multi-page, or JS-assembled) into structured facts an agent can consume directly — component tree + computed styles + semantic annotations — and provides an acceptance diff between the restored page and the prototype (same-viewport pixel comparison + structural / style / interaction discrepancy report).
+[简体中文](README.zh-CN.md) · [CLI reference](docs/cli-reference.md) · [Output schema](docs/output-schema.md)
 
-## Why it exists
+</div>
 
-Reading HTML source directly ("naive reading") causes systematic omissions for agents:
+---
 
-- **Computed styles do not exist in source** — CSS cascade, inheritance, browser defaults, and the resolved values behind `var()` references are only knowable after real rendering. In one measured prototype there were 1,201 `var()` references across 37 custom properties; naive reading means mentally simulating the renderer.
-- **Layout geometry does not exist in source** — absolute-position coordinates, actual flex/grid arrangements, real element widths and heights.
-- **Pure parsers cannot produce layout** — jsdom has no layout engine (`getBoundingClientRect` always returns 0) and does not implement pseudo-element computed styles.
-- **Dynamic prototypes are unreadable at source level** — in one measured 783 KB prototype, static HTML was only 1 KB while 650 KB was JavaScript; every screen was assembled at runtime via `innerHTML`, and 6 of 7 screens were initially invisible.
-- **Context truncation** — a 220k-token prototype fits barely half of its source into a typical context window.
+## What it is
 
-This tool renders in a real browser and extracts facts, turning guesses into reads. The acceptance diff turns "does the restoration look right" from an eyeball judgment into an item-by-item fix list.
+An agent skill plus two CLI tools. `capture.js` renders an exported HTML prototype in a real browser and reads it the way a browser does — every screen, every computed style, every interaction — then writes a component tree an agent can restore code from. `diff.js` closes the loop: it compares the restoration against the prototype pixel by pixel and returns a list of concrete discrepancies.
 
-## Features
+It exists because an agent that reads HTML source is reading a description of a page, not the page.
 
-### capture.js — prototype capture (four modules)
+## Why it is needed
 
-| Module | Capability |
-|---|---|
-| **extract** | Full DOM traversal + `getBoundingClientRect` layout geometry + computed-style whitelist capture (diffed against the parent, keeping only non-inherited differences — compression for free) |
-| **traverse** | Automatic entry discovery (nav / tabs / `data-view` etc.) → click each → visible-element signature deduplication → per-screen screenshots. Multi-screen JS-assembled prototypes require this path; plain rendering misses 6 of 7 screens |
-| **compress** | Repeated sibling subtrees folded by structural signature (`rep: N`), style inheritance diff, px rounding |
-| **output** | `prototype.json` + `summary.md` + per-screen screenshots |
+- **Computed styles are not in the source.** Cascade, inheritance, browser defaults and resolved `var()` values only exist after rendering. In one measured prototype: 1,201 `var()` references across 37 custom properties.
+- **Layout geometry is not in the source.** Absolute coordinates, real flex/grid arrangement, actual element sizes.
+- **Dynamic prototypes are unreadable at source level.** In one measured 783 KB prototype, static HTML was 1 KB and 650 KB was JavaScript; all screens were assembled at runtime via `innerHTML`, and 6 of 7 screens were invisible on load.
+- **Parsers cannot substitute.** jsdom has no layout engine (`getBoundingClientRect` always 0) and no pseudo-element computed styles.
 
-Detail dimensions covered: pseudo-elements (`::before/::after`, including `content:''` + absolutely-positioned decorative layers), interactive-element inventory (button/input/select/textarea/[role] with disabled / required / placeholder / overlay membership), resource references (img/srcset/background-image/@font-face, broken-reference detection), **responsive breakpoint inventory** (all `@media` conditions deduplicated from the CSSOM), **theme-state probe** (detects theme toggles, records effective colors of key elements before/after), modal / drawer / toast inventory (hidden ones included with subtree structure), same-origin iframe recursion (depth ≤ 2; cross-origin frames record `src` only), canvas size recording, lazy-loading fallback (IntersectionObserver stub + `loading=eager` + full-page scroll), and **frozen animations before every screenshot** (so per-screen baselines are reproducible across runs).
+## You get
 
-### diff.js — restoration acceptance
+<img src="assets/features.webp" alt="Read every screen, turn mismatches into work orders, run with zero dependencies" width="100%">
 
-- **Pixel comparison**: same-viewport fullPage screenshots of both sides, per-pixel threshold comparison, differing pixels highlighted red in `diff-overlay.png`, aggregated into **100px-block hotspots** mapped to prototype sections
-- **Structural discrepancy report**: missing/extra classes (sorted by frequency), per-property class-style comparison (sampled by frequency, precise to `class → property → prototype value vs restored value`), visible-text multiset diff, interactive-element diff, page-height deviation, broken resource references
-- **Determinism**: animations frozen before screenshots (animation paused + transition none) + anti-lazy-loading, so motion timing never produces false differences
-- **Zero npm dependencies**: pixel comparison runs inside the browser canvas; no local PNG decoding needed
+A structured `prototype.json` (component tree, style diffs, interactions, breakpoints, theme states, overlays, iframe subtrees), a `summary.md` for the agent to read first, a screenshot per screen, and — after restoration — a `diff-report.md` with a pixel-difference ratio, labelled hotspots and a style-mismatch list.
 
-## Requirements
+## How it works
 
-| Dependency | Requirement | Notes |
-|---|---|---|
-| Node.js | ≥ 18 (developed on 22.x) | No other npm runtime dependencies |
-| playwright-core | ≥ 1.40 (developed on 1.62.1) | Install yourself (see below); never auto-downloaded |
-| Browser | Local Chrome or Edge (either) | Tried in order: chrome → msedge → bundled Chromium (browser download only as last resort) |
-| OS | Windows / macOS / Linux | Verified on Windows |
+`capture.js` runs four steps: render and extract (full DOM walk + `getBoundingClientRect` + computed-style whitelist, diffed against each parent so only non-inherited differences are kept), traverse (discover nav/tab entries, click each, dedupe screens by visible-element signature), compress (fold repeated sibling subtrees, round values) and output. Screenshots are taken with animations frozen, so the baseline is reproducible. `diff.js` re-renders both sides at the same viewport, freezes both, and compares inside the browser canvas — no image library, no local PNG decoding.
 
-## Installation
-
-**Option 1: agent skill installer (recommended)**
+## Quick start
 
 ```bash
-npx skills add clarklee186/html-prototype-reader
-```
+npm i                                     # playwright-core only (optional peer dependency)
 
-**Option 2: clone**
-
-```bash
-git clone https://github.com/clarklee186/html-prototype-reader.git
-```
-
-**Option 3: manual copy** — copy `SKILL.md`, `_meta.json`, and `scripts/` into your agent's skill directory (e.g. WorkBuddy: `~/.workbuddy/skills/html-prototype-reader/`).
-
-Then install the single runtime dependency:
-
-```bash
-# Simplest (uses the repo's package.json, where playwright-core is an optional peer dependency)
-npm i
-
-# Or install it explicitly into any node_modules location; scripts resolve in this order:
-# ① current NODE_PATH ② ~/.workbuddy/binaries/node/workspace/node_modules ③ sibling node_modules
-npm i playwright-core
-```
-
-The repo ships a `package.json` declaring `engines.node >= 18` and two shortcuts: `npm run capture -- <args>` and `npm run diff -- <args>`.
-
-## Usage
-
-### ① Capture a prototype
-
-```bash
-node scripts/capture.js <html-file-or-dir> <output-dir> [options]
-
-# Examples
 node scripts/capture.js "C:/proto/dashboard.html" "C:/out/prototype"
-node scripts/capture.js "C:/proto/pages/" "C:/out/prototype" --viewport 375x812
-```
-
-A directory input is processed page by page in filename order (multi-page prototypes). Outputs:
-
-| File | Content |
-|---|---|
-| `summary.md` | **Read this first**: file composition (markup/CSS/JS bytes + token estimate), screen inventory table, breakpoints, theme states, overlays, broken resources |
-| `prototype.json` | Full structured data (schema below) |
-| `screen-NN.png` | Per-screen screenshots (visual baseline) |
-
-`prototype.json` component-tree node fields: `t`=tag, `id`, `c`=class array, `r`={x,y,w,h}, `v`=visibility, `rep`=repeated-sibling fold count, `s`=style diff, `ps`=pseudo-elements, `sem`=semantic attributes (role/aria/alt/placeholder/disabled…), `tx`=leaf text, `ch`=children, `img/canvas/iframe`=resource info; page-level keys include `screens[]` (per-screen tree + `interactions` inventory), `overlays[]` (modals/toasts, hidden ones with subtree), `css` (rule stats / breakpoints / `customPropsByState` theme variables / fontFaces), `theme` (toggle probe), `failedRequests`.
-
-### ② Restoration acceptance diff
-
-```bash
-node scripts/diff.js <prototype.html|URL> <restored.html|URL> <output-dir> [options]
-
-# A restoration served by a dev server can be compared directly
 node scripts/diff.js "C:/proto/dashboard.html" "http://localhost:5173" "C:/out/acceptance"
 ```
 
-Outputs: `diff-report.md` (**read first**: ratio overview + hotspot table + style-mismatch list), `diff-overlay.png` (differing pixels in red), `prototype.png` / `restored.png`, `diff.json`.
+Read `C:/out/prototype/summary.md` first: screens, breakpoints, theme states, overlays and broken references on one page. `capture.js` accepts a directory to process a multi-page prototype, and the diff accepts a local file or a running dev-server URL on either side.
 
-**Interpretation guide**: pixel ratio <1% with no style mismatches → consistent; 1–5% → check whether hotspots concentrate in motion/icons; >5% → fix region by region. The diff compares the **initial render state** of both sides; for multi-screen prototypes restore screen by screen per the capture inventory and run diff per screen.
+## Installation
 
-### ③ As an agent skill
+```bash
+npx skills add clarklee186/html-prototype-reader           # as an agent skill
+# or
+git clone https://github.com/clarklee186/html-prototype-reader.git && cd html-prototype-reader && npm i
+```
 
-Once installed into an agent's skill directory, it triggers automatically when the user provides an HTML prototype file and asks to "restore / replicate / convert to code / analyze page structure / verify restoration consistency". Standard workflow: `capture.js` to read → agent restores → `diff.js` to verify → fix per discrepancy list → re-run diff until it passes.
+Requirements: Node ≥ 18, `playwright-core` ≥ 1.40, and a local Chrome or Edge (only if neither exists does it download a bundled Chromium). `playwright-core` is resolved from `NODE_PATH`, then `~/.workbuddy/binaries/node/workspace/node_modules`, then a sibling `node_modules`.
 
-## Configuration
+## CLI
 
-### capture.js options
+```bash
+node scripts/capture.js <html-file-or-dir> <output-dir> [--viewport 1440x900] [--max-screens 30] [--timeout 45000]
+node scripts/diff.js    <prototype|URL>  <restored|URL>  <output-dir> [--viewport 1440x900] [--threshold 32] [--block 100]
+```
 
-| Option | Default | Description |
-|---|---|---|
-| `--viewport WxH` | `1440x900` | Render viewport; use `375x812` for mobile restorations |
-| `--max-screens N` | `30` | Screen-count cap for traversal, guarding against entry-click loops |
-| `--timeout ms` | `45000` | Page load timeout |
-| `DEBUG=1` (env) | off | Per-screen capture log (entry hits / click failures / dedup results) — enable when screens go missing |
+Full option tables, interpretation thresholds and scenario advice: [docs/cli-reference.md](docs/cli-reference.md). Output files and the `prototype.json` field reference: [docs/output-schema.md](docs/output-schema.md).
 
-### diff.js options
+## Limits
 
-| Option | Default | Description |
-|---|---|---|
-| `--threshold N` | `32` | Pixel-diff threshold (max per-channel delta); raise to tolerate anti-aliasing noise |
-| `--block N` | `100` | Hotspot block edge in px; lower for finer localization |
-| `--viewport WxH` | `1440x900` | **Both sides must use the same viewport**, otherwise a size mismatch is reported |
+Deep interactions (modal contents, nested tabs, inline expansion) only exist after being triggered. Canvas bitmaps are not extracted, and cross-origin iframes record `src` only (same-origin frames are recursed to depth 2). Screen dedup is signature-based, so near-identical screens can merge — bounded by `--max-screens`.
 
-### Scenario-based advice
+## Proof
 
-- **Missing screens**: run with `DEBUG=1` to see each entry's click and dedup result; for prototypes with unusual nav structures, extend the entry selectors
-- **Many false style differences**: raise `--threshold` (e.g. 48); residual differences in icon/font-rendering areas can usually be ignored
-- **Dark/light themes**: capture already outputs `customPropsByState` and the theme probe — implement both sets; run diff separately per theme state
-- **Context overflow**: read `summary.md` and screenshots first, drill into `prototype.json` per screen/subtree; never ingest it whole
-
-## Known limitations
-
-- Deep interactions (modal contents, nested tabs, inline expansion states) are only visible after being triggered and cannot be captured otherwise; trigger specific entries manually and re-run capture when needed
-- Canvas: only size and position are recorded, bitmap content is not extracted; same-origin iframes are recursed to depth 2, cross-origin iframes record `src` only
-- Screen deduplication uses a "visible elements + class signature" hash; near-identical screens may merge (bounded by `--max-screens`)
-
-## Regression baseline
-
-On a 783 KB multi-screen dashboard prototype (JS-assembled, dual theme, 45 `@media` blocks): capture produced 8 screens / 908 visible elements / 16 distinct breakpoints / dual-theme probe in 6 s; self-diff ratio was 0 (4 s); an injected color/radius mutation was reported as 4 style mismatches localized to class + property + value (3 s).
+On a 783 KB multi-screen dashboard prototype (JS-assembled, dual theme, 45 `@media` blocks): capture returned 8 screens, 908 visible elements, 16 distinct breakpoints and the dual-theme probe in 6–7 s; a self-diff scored ratio 0; an injected colour/radius mutation was reported as 4 style mismatches localised to class + property + value.
 
 ## License
 
 [MIT](LICENSE)
+
+## About the author
+
+Built and maintained by [Clark Lee (@clarklee186)](https://github.com/clarklee186). Issues and pull requests are welcome — [AGENTS.md](AGENTS.md) documents the invariants to keep in mind before changing anything.

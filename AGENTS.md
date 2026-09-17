@@ -21,7 +21,9 @@ LICENSE           # MIT
 scripts/shared.js     # single source of truth: STYLE_PROPS, ALWAYS_KEEP, DIFF_PROPS, FREEZE_CSS, LAUNCH_ARGS, IFRAME_DEPTH_LIMIT
 scripts/capture.js    # render + traverse + compress + output
 scripts/diff.js       # acceptance diff (pixel + structural)
-README.md / README.zh-CN.md   # English / Chinese, kept in structural parity (9 sections, same code blocks and tables)
+README.md / README.zh-CN.md   # English / Chinese entrance pages, kept in structural parity
+assets/                # README visuals (banner.webp, features.webp) — generated from the readme-generator skill templates
+docs/                  # detail that does not belong in the README entrance: CLI reference, output schema (EN + zh-CN)
 AGENTS.md / CLAUDE.md         # this file and its importer
 ```
 
@@ -62,5 +64,6 @@ After any behavior change: re-run capture on the reference prototype and confirm
 - Commits: conventional commits (`feat:`, `fix:` …), no backticks in messages. Default branch `main`, LF line endings enforced by `.gitattributes`.
 - Version bumps: update `version` in **both** `_meta.json` and `package.json`; if the description changed, update it in **both** `_meta.json` and the `SKILL.md` frontmatter, word for word.
 - Document every non-obvious fix in the `SKILL.md` "维护记录" (maintenance log) section — that log is how future agents avoid rediscovering the pitfalls above.
-- User-facing docs (`README.md` / `README.zh-CN.md`) are maintained in parallel; structural parity is required (same section count, same code blocks and tables), language differs.
+- User-facing docs (`README.md` / `README.zh-CN.md`) are maintained in parallel; structural parity is required (same section count, same code blocks), language differs. They follow the portfolio-README structure produced with the `readme-generator` skill: centred header + banner, ≤3 badges, then What / Why / You get / How it works / Quick start / Install / CLI / Limits / Proof / License / Author. Keep depth out of the README — option tables and output schemas live in `docs/`, linked from the CLI section.
+- README visuals are generated from the `readme-generator` skill's HTML templates (`assets/banner.webp`, `assets/features.webp`) with the project's own story; regenerate them if the positioning changes, and keep all in-image text ≥22px (body copy ≥28px) since GitHub scales images down.
 - Do not add npm runtime dependencies. The zero-dependency design (in-browser canvas pixel comparison) is intentional.
