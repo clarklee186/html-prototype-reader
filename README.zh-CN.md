@@ -30,7 +30,7 @@
 
 ## 你会得到什么
 
-<img src="assets/features.webp" alt="一次读全一个原型、把不一致变成工单、零依赖本地可跑" width="100%">
+<img src="assets/features.zh-CN.webp" alt="一次读全一个原型、把不一致变成工单、零依赖本地可跑" width="100%">
 
 一份结构化 `prototype.json`（组件树、样式 diff、交互清单、断点、主题态、覆盖层、iframe 子树）、一份供 Agent 先读的 `summary.md`、每屏一张截图；还原之后再拿到 `diff-report.md`——像素差异率、带标注的差异热区、以及逐条样式不一致清单。
 
