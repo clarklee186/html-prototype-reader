@@ -47,6 +47,9 @@ These were learned by debugging; each is load-bearing. If you touch the relevant
 7. **Output paths must be absolute** in `diff.js` (`OUT = path.resolve(outDir)`); relative output dirs break the `file://` image URLs passed to the compare page.
 8. **`_meta.json` description must be byte-identical to the SKILL.md frontmatter description, and `version` must match both `package.json` and the semver you publish with.** Registries reject mismatches. Bump on every published change.
 
+9. **Widget state is read as DOM properties, never attributes.** JS-set state (`el.checked = true`, `el.value = '…'`, `dialog.open = true`) does not update the corresponding attribute, so attribute-only reading silently misses it — this caused a 17-point coverage gap (7/24 → 24/24 on the component matrix, v1.0.5). `semOf` reads `checked` / `indeterminate` / `value` / `selected` / `open` / `multiple` as properties, plus the aria-state attributes (`aria-checked` / `aria-selected` / `aria-expanded` / `aria-pressed` / `aria-valuenow`…). When adding new state reads, decide explicitly: property for state, attribute for markup.
+10. **Off-canvas detection uses document flow bounds, not the viewport.** `offViewport` compares absolute page coordinates against `documentElement.clientWidth` / `scrollHeight`; a viewport-relative check would flag every below-the-fold element on tall pages.
+
 ## Regression baseline
 
 No unit tests. Validate changes against a real multi-screen JS-assembled prototype (dark/light themes, many `@media` blocks). Documented baseline on one such file:
@@ -58,6 +61,7 @@ No unit tests. Validate changes against a real multi-screen JS-assembled prototy
 A mutated fixture lives outside this repo (workbench `poc-html-reader/mutant/`); recreate one by string-replacing two CSS custom property values in any prototype.
 
 After any behavior change: re-run capture on the reference prototype and confirm screen count, breakpoint list, and theme probe are unchanged unless the change was intended to alter them.
+
 
 ## Conventions
 

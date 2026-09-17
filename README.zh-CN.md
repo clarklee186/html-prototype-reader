@@ -36,7 +36,7 @@
 
 ## 工作方式
 
-`capture.js` 走四步：渲染提取（完整 DOM 遍历 + `getBoundingClientRect` + computed style 白名单，对父级做继承 diff，只留非继承差异）、交互遍历（发现导航/tab 入口逐个点击，按可见元素签名去重分屏）、压缩（折叠重复兄弟子树、数值取整）、落盘。截图前冻结动画，保证基准可复现。`diff.js` 把两边同视口重渲染、同样冻结，在浏览器 canvas 内逐像素比对——不依赖图像库，也不在本地解码 PNG。
+`capture.js` 走四步：渲染提取（完整 DOM 遍历 + `getBoundingClientRect` + computed style 白名单，对父级做继承 diff，只留非继承差异）、交互遍历（发现导航/tab 入口逐个点击，按可见元素签名去重分屏）、压缩（折叠重复兄弟子树、数值取整）、落盘。截图前冻结动画，保证基准可复现。 表单与组件状态一律读**实时 DOM property**（`checked`、`value`、`selected`、`open`、`indeterminate`）而非 attribute——JS 设的值不写回标记也能捕获；文档流之外的元素（离屏抽屉）会打上 `offViewport` 标记。`diff.js` 把两边同视口重渲染、同样冻结，在浏览器 canvas 内逐像素比对——不依赖图像库，也不在本地解码 PNG。
 
 ## 快速开始
 
@@ -70,7 +70,7 @@ node scripts/diff.js    <原型|URL>      <还原|URL>    <输出目录> [--view
 
 ## 已知边界
 
-深层交互（弹窗内容、tab 嵌套、行内展开态）只有被触发后才存在。Canvas 位图不提取，跨域 iframe 只记录 `src`（同源 iframe 递归至深度 2）。屏幕去重基于签名，极相似屏幕可能被合并——由 `--max-screens` 兜底。
+深层交互（弹窗内容、tab 嵌套、行内展开态）只有被触发后才存在。Canvas 位图不提取，跨域 iframe 只记录 `src`（同源 iframe 递归至深度 2）。屏幕去重基于签名，极相似屏幕可能被合并——由 `--max-screens` 兜底。 多版本报告同样受遍历覆盖面约束：遍历未访问屏幕的选择器会报告为「捕获中未出现」，而不是「死内容」。
 
 ## 可信产物
 

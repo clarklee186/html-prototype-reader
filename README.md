@@ -36,7 +36,7 @@ A structured `prototype.json` (component tree, style diffs, interactions with li
 
 ## How it works
 
-`capture.js` runs four steps: render and extract (full DOM walk + `getBoundingClientRect` + computed-style whitelist, diffed against each parent so only non-inherited differences are kept), traverse (discover nav/tab entries, click each, dedupe screens by visible-element signature), compress (fold repeated sibling subtrees, round values) and output. Screenshots are taken with animations frozen, so the baseline is reproducible. `diff.js` re-renders both sides at the same viewport, freezes both, and compares inside the browser canvas — no image library, no local PNG decoding.
+`capture.js` runs four steps: render and extract (full DOM walk + `getBoundingClientRect` + computed-style whitelist, diffed against each parent so only non-inherited differences are kept), traverse (discover nav/tab entries, click each, dedupe screens by visible-element signature), compress (fold repeated sibling subtrees, round values) and output. Screenshots are taken with animations frozen, so the baseline is reproducible. Form and widget state is read as **live DOM properties** (`checked`, `value`, `selected`, `open`, `indeterminate`) rather than attributes — JS-set states that never touch the markup are still captured — and elements outside the document flow (off-canvas drawers) are flagged with `offViewport`. `diff.js` re-renders both sides at the same viewport, freezes both, and compares inside the browser canvas — no image library, no local PNG decoding.
 
 ## Quick start
 
@@ -70,7 +70,7 @@ Full option tables, interpretation thresholds and scenario advice: [docs/cli-ref
 
 ## Limits
 
-Deep interactions (modal contents, nested tabs, inline expansion) only exist after being triggered. Canvas bitmaps are not extracted, and cross-origin iframes record `src` only (same-origin frames are recursed to depth 2). Screen dedup is signature-based, so near-identical screens can merge — bounded by `--max-screens`.
+Deep interactions (modal contents, nested tabs, inline expansion) only exist after being triggered. Canvas bitmaps are not extracted, and cross-origin iframes record `src` only (same-origin frames are recursed to depth 2). Screen dedup is signature-based, so near-identical screens can merge — bounded by `--max-screens`. The multi-version report is bounded by traversal coverage too: CSS selectors belonging to screens the traversal never visited are reported as *not seen in capture*, not as dead.
 
 ## Proof
 
