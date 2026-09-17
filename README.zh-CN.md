@@ -32,7 +32,7 @@
 
 <img src="assets/features.zh-CN.webp" alt="一次读全一个原型、把不一致变成工单、零依赖本地可跑" width="100%">
 
-一份结构化 `prototype.json`（组件树、样式 diff、交互清单、断点、主题态、覆盖层、iframe 子树）、一份供 Agent 先读的 `summary.md`、每屏一张截图；还原之后再拿到 `diff-report.md`——像素差异率、带标注的差异热区、以及逐条样式不一致清单。
+一份结构化 `prototype.json`（组件树、样式 diff、交互清单、断点、主题态、覆盖层、iframe 子树）、一份供 Agent 先读的 `summary.md`、每屏一张截图；还原之后再拿到 `diff-report.md`——像素差异率、带标注的差异热区、以及逐条样式不一致清单。AI 生成的原型常常多版本内容共存，capture 会一并报告：休眠与从未出现的 CSS 选择器、隐藏分支、重复 id、版本残留类名——让还原只对准当前可达的版本。
 
 ## 工作方式
 

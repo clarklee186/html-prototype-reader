@@ -19,6 +19,7 @@ Page level:
 | `pages[].css` | Rule counts, `:hover` / `:focus` / pseudo-element rule counts, `mediaConditions`, deduplicated `breakpoints[]`, `customPropsByState` (theme variables per selector), `fontFaces[]` |
 | `pages[].theme` | Theme toggle probe: whether a toggle was found plus key element colours before/after |
 | `pages[].iframes` | Recursion stats: total, `sameOriginRecursed`, `crossOriginOrBlocked` |
+| `pages[].deadContent` | Multi-version / dead-content report: `css` (`staticChecked`, `matchedNow`, `dormantCount/Samples` — tokens seen on other screens, `notSeenInCaptureCount/Samples` — never seen during capture, may activate on unvisited screens, theme states or deep entries), `duplicateIds`, `versionResidueClasses` (`-old` / `-v2` / `-backup` patterns), `hiddenBranches` (label, subtree size, interactive count) |
 | `pages[]` | `entriesFound`, `entriesClicked`, `failedRequests`, page title/height, channel used |
 | `fileComposition` | Total bytes, token estimate, markup/CSS/JS split — decides whether naive reading was ever viable |
 

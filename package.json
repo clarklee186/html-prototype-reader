@@ -1,6 +1,6 @@
 {
   "name": "html-prototype-reader",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Render-based HTML prototype reader for AI agents: component tree + computed styles + interactions extraction, and acceptance diff (pixel + structural).",
   "license": "MIT",
   "private": true,

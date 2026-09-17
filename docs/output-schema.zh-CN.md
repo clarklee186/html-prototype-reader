@@ -19,6 +19,7 @@
 | `pages[].css` | 规则统计、`:hover` / `:focus` / 伪元素规则数、`mediaConditions`、去重后的 `breakpoints[]`、`customPropsByState`（各选择器的主题变量）、`fontFaces[]` |
 | `pages[].theme` | 主题切换探针：是否检测到切换按钮，以及关键元素切换前后的生效色 |
 | `pages[].iframes` | 递归统计：总数、`sameOriginRecursed`、`crossOriginOrBlocked` |
+| `pages[].deadContent` | 多版本 / 死内容报告：`css`（`staticChecked` 静态可判数、`matchedNow` 当前命中、`dormantCount/Samples` 休眠——token 在其他屏幕出现过、`notSeenInCaptureCount/Samples` 捕获中未出现——可能在未访问的屏幕、主题态或深层入口激活）、`duplicateIds` 重复 id、`versionResidueClasses` 版本残留类名（`-old` / `-v2` / `-backup` 模式）、`hiddenBranches` 隐藏分支（标签、子树规模、交互元素数） |
 | `pages[]` | `entriesFound`、`entriesClicked`、`failedRequests`、页面标题/高度、所用浏览器通道 |
 | `fileComposition` | 总字节、token 估算、标记/CSS/JS 占比——用来判断"裸读"是否本来可行 |
 

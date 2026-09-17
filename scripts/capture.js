@@ -234,7 +234,87 @@ function inPageLib() {
     return out;
   }
 
-  return { buildTree, visibleEls, interactiveList, cssStats, overlayInventory, styleMap, isVisible };
+  /** dead-content：死 CSS / 重复 id / 版本残留类名 / 隐藏分支可达性 */
+  function deadContent(union) {
+    const out = {};
+    const all = Array.from(document.querySelectorAll('*'));
+
+    // 重复 id
+    const idCount = {};
+    all.forEach(el => { if (el.id) idCount[el.id] = (idCount[el.id] || 0) + 1; });
+    out.duplicateIds = Object.entries(idCount).filter(([, n]) => n > 1).map(([id, n]) => ({ id, count: n })).slice(0, 20);
+    out.duplicateIdTotal = out.duplicateIds.length;
+
+    // 版本残留类名（-old / -v2 / -backup / copy / legacy / draft / tmp 等）
+    const residueRe = /(^|[-_])(old|legacy|deprecated|backup|bak|copy|copied|draft|tmp|temp|test|v\d+)([-_]|$)/i;
+    const classSeen = new Set(); const residue = new Set();
+    all.forEach(el => {
+      if (typeof el.className !== 'string') return;
+      for (const c of el.className.trim().split(/\s+/)) {
+        if (!c || classSeen.has(c)) continue; classSeen.add(c);
+        if (residueRe.test(c)) residue.add(c);
+      }
+    });
+    out.versionResidueClasses = [...residue].slice(0, 20);
+    out.versionResidueTotal = residue.size;
+
+    // 隐藏分支根：自身隐藏而父级可见的元素（排除 head/script/style 等天然不显示的标签）
+    const NATURAL_HIDDEN = new Set(['HEAD', 'SCRIPT', 'STYLE', 'LINK', 'META', 'TITLE', 'NOSCRIPT', 'TEMPLATE']);
+    const isHidden = el => { const st = getComputedStyle(el); return st.display === 'none' || st.visibility === 'hidden'; };
+    const branches = [];
+    all.forEach(el => {
+      if (NATURAL_HIDDEN.has(el.tagName)) return;
+      if (!isHidden(el)) return;
+      const parent = el.parentElement;
+      if (parent && (isHidden(parent) || NATURAL_HIDDEN.has(parent.tagName))) return; // 只取分支根
+      branches.push({
+        label: el.id ? '#' + el.id : (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : el.tagName.toLowerCase()),
+        subtreeElements: el.querySelectorAll('*').length + 1,
+        interactive: el.querySelectorAll('button,input,select,textarea,a').length,
+        tag: el.tagName.toLowerCase(),
+      });
+    });
+    out.hiddenBranches = branches.slice(0, 20);
+    out.hiddenBranchTotal = branches.length;
+
+    // 死 CSS：静态选择器在当前 DOM 零匹配 → 按 token 是否在捕获过的屏幕中出现，分 dormant / unseen
+    const tags = new Set(union.tags); const classes = new Set(union.classes); const ids = new Set(union.ids);
+    const dormant = []; const unseen = []; let matchedNow = 0, staticChecked = 0, skipped = 0;
+    const seen = new Set();
+    const walk = rules => {
+      for (const r of rules) {
+        if (r.type === CSSRule.STYLE_RULE) {
+          const selRaw = r.selectorText || '';
+          if (!selRaw) continue;
+          if (/:(hover|focus|focus-visible|active|visited|checked|disabled|enabled|before|after|placeholder|selection|first-line|first-letter|target|root)/.test(selRaw)
+            || /::/.test(selRaw) || selRaw.includes('[') || selRaw.includes('*') || selRaw.includes(',')
+            || /(:nth-|:not\(|:is\(|:has\(|:where\()/.test(selRaw)) { skipped++; continue; }
+          const sel = selRaw.trim();
+          if (!sel || seen.has(sel)) { skipped++; continue; }
+          seen.add(sel); staticChecked++;
+          try {
+            if (document.querySelectorAll(sel).length > 0) { matchedNow++; continue; }
+          } catch (e) { skipped++; continue; }
+          // 零匹配 → 按 token 分类
+          let allSeen = true;
+          const tagTok = sel.match(/(^|[\s>~+])([a-zA-Z][\w-]*)/g) || [];
+          for (const t of tagTok) { const tag = t.replace(/^[\s>~+]/, '').toLowerCase(); if (tag !== 'html' && tag !== 'body' && !tags.has(tag)) allSeen = false; }
+          for (const m of sel.matchAll(/\.([\w-]+)/g)) if (!classes.has(m[1])) allSeen = false;
+          for (const m of sel.matchAll(/#([\w-]+)/g)) if (!ids.has(m[1])) allSeen = false;
+          (allSeen ? dormant : unseen).push(sel.slice(0, 80));
+        } else if (r.cssRules) walk(r.cssRules);
+      }
+    };
+    for (const s of document.styleSheets) { try { walk(s.cssRules); } catch (e) { /* 跨域 */ } }
+    out.css = {
+      staticChecked, matchedNow, skipped,
+      dormantCount: dormant.length, dormantSamples: dormant.slice(0, 15),
+      notSeenInCaptureCount: unseen.length, notSeenInCaptureSamples: unseen.slice(0, 15),
+    };
+    return out;
+  }
+
+  return { buildTree, visibleEls, interactiveList, cssStats, overlayInventory, styleMap, isVisible, deadContent };
 }
 
 /* ---------- 主流程 ---------- */
@@ -303,6 +383,7 @@ function inPageLib() {
     // ===== traverse：入口发现 + 逐个点击 + 签名去重 =====
     const screens = [];
     const seenSig = new Set();
+    const screenTokenAccum = []; // dead-content 分析用：各屏的标签/类/id/属性串
     async function captureScreen(name, entryText) {
       const info = await page.evaluate(`(() => {
         const lib = ${libSrc};
@@ -312,11 +393,25 @@ function inPageLib() {
         let h = 0; const s = sigParts.join('|');
         for (let i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; }
         const heading = document.querySelector('h1,h2,h3');
-        return { sig: String(h), count: vis.length, heading: heading ? heading.textContent.replace(/\\s+/g,' ').trim().slice(0, 40) : '' };
+        // dead-content 分析用的 token 集（标签/类/id）与全部属性串（可达性启发式）
+        const tags = new Set(), classes = new Set(), ids = new Set(); let attrsText = '';
+        for (const el of vis) {
+          tags.add(el.tagName.toLowerCase());
+          if (el.id) ids.add(el.id);
+          if (typeof el.className === 'string') for (const c of el.className.trim().split(/\\s+/)) if (c) classes.add(c);
+          for (const a of el.attributes) attrsText += ' ' + a.name + '=' + a.value;
+        }
+        return {
+          sig: String(h), count: vis.length,
+          heading: heading ? heading.textContent.replace(/\\s+/g,' ').trim().slice(0, 40) : '',
+          tokens: { tags: [...tags], classes: [...classes], ids: [...ids] },
+          attrsText: attrsText.slice(0, 400000),
+        };
       })()`).catch(() => null);
       if (!info) return null;
       if (seenSig.has(info.sig)) return { dup: true };
       seenSig.add(info.sig);
+      if (info.tokens) screenTokenAccum.push({ tokens: info.tokens, attrsText: info.attrsText });
       const tree = await page.evaluate(`(() => {
         const lib = ${libSrc};
         const root = document.body;
@@ -356,6 +451,20 @@ function inPageLib() {
       if (sc && !sc.dup) screens.push(sc);
     }
 
+    // ===== dead-content：汇总各屏 token 并集，识别死 CSS / 重复 id / 版本残留 / 隐藏分支 =====
+    let deadContent = null;
+    if (screenTokenAccum.length) {
+      const tags = new Set(), classes = new Set(), ids = new Set(); let attrsText = '';
+      for (const st of screenTokenAccum) {
+        st.tokens.tags.forEach(t => tags.add(t));
+        st.tokens.classes.forEach(c => classes.add(c));
+        st.tokens.ids.forEach(i => ids.add(i));
+        attrsText += ' ' + st.attrsText;
+      }
+      const union = { tags: [...tags], classes: [...classes], ids: [...ids], attrsText: attrsText.slice(0, 400000) };
+      deadContent = await page.evaluate(libSrc + '.deadContent(' + JSON.stringify(union) + ')').catch(e => ({ error: String(e).slice(0, 120) }));
+    }
+
     // ===== 汇总该页 =====
     const meta = await page.evaluate(() => ({
       title: document.title, url: location.href,
@@ -379,6 +488,7 @@ function inPageLib() {
       file: path.basename(file), ...meta, channel: channelUsed,
       screens, overlays, css, theme,
       entriesFound, entriesClicked, iframes: iframeStats,
+      deadContent,
       themeToggled: !!theme.toggleFound,
     });
     await page.close();
@@ -421,6 +531,12 @@ function inPageLib() {
     L.push(`- 交互遍历：发现入口 ${p.entriesFound ?? '-'} 个，成功点击 ${p.entriesClicked ?? '-'} 次，去重后得 ${p.screens.length} 屏${p.entriesFound > p.screens.length ? '（差额为签名重复或点击失败）' : ''}`);
     L.push(`- 覆盖层（弹窗/抽屉/Toast）：${(p.overlays || []).length} 个${(p.overlays || []).filter(o => o.hiddenNow).length ? `，其中 ${(p.overlays || []).filter(o => o.hiddenNow).length} 个当前隐藏（结构已在 prototype.json 中，触发后可见）` : ''}`);
     if (p.iframes && p.iframes.total) L.push(`- iframe：${p.iframes.total} 个，其中同源已递归 ${p.iframes.sameOriginRecursed} 个、跨域或不可访问 ${p.iframes.crossOriginOrBlocked} 个（只记 src）`);
+    if (p.deadContent && !p.deadContent.error) {
+      const dc = p.deadContent, c = dc.css || {};
+      L.push(`- **多版本/死内容**：静态 CSS 规则 ${c.staticChecked ?? '?'} 条中，当前 DOM 命中 ${c.matchedNow ?? '?'} 条；休眠（token 在其他屏幕出现过，如 active 态）${c.dormantCount ?? 0} 条；**捕获中未出现** ${c.notSeenInCaptureCount ?? 0} 条——可能在未访问的屏幕、主题态或深层入口中激活，还原时不要实现`);
+      L.push(`- 版本残留类名：${dc.versionResidueTotal} 个${dc.versionResidueClasses.length ? '（' + dc.versionResidueClasses.slice(0, 8).map(x => '`' + x + '`').join('、') + (dc.versionResidueTotal > 8 ? ' …' : '') + '）' : ''}；重复 id：${dc.duplicateIdTotal} 组`);
+      L.push(`- 隐藏分支：${dc.hiddenBranchTotal} 个${dc.hiddenBranches.length ? '（' + dc.hiddenBranches.map(b => b.label + ' ' + b.subtreeElements + 'el' + (b.interactive ? '/' + b.interactive + '交互' : '')).join('、') + '）' : ''}——不可达的分支不在还原范围内`);
+    }
     if (p.css && p.css.breakpoints) L.push(`- 响应式断点：${p.css.breakpoints.join(' / ')}px（@media 块 ${p.css.mediaConditions.length} 个）`);
     if (p.css) L.push(`- CSS 交互态：:hover ${p.css.hover} 条、:focus ${p.css.focus} 条、伪元素规则 ${p.css.pseudoRules} 条、@keyframes ${p.css.keyframes} 组；自定义属性定义 ${Object.keys(p.css.customPropsByState || {}).length} 处`);
     if (p.theme && p.theme.toggleFound) L.push(`- 主题切换：检测到，切换前后探针见 prototype.json（还原时两种状态都要覆盖）`);
